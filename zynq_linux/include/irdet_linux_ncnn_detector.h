@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#include <vector>
+
 #include "ir_model_runner.h"
 
 struct irdet_linux_runtime_config_t {
@@ -13,6 +15,14 @@ struct irdet_linux_runtime_config_t {
     float input_scale;
     float mean;
     float stddev;
+};
+
+struct irdet_linux_blob_tensor_t {
+    std::vector<float> values;
+    int dims;
+    int w;
+    int h;
+    int c;
 };
 
 class irdet_linux_ncnn_detector {
@@ -42,6 +52,22 @@ public:
         irdet_detection_t* out_detections,
         uint32_t max_detections,
         uint32_t* out_count,
+        irdet_preprocess_stats_t* out_stats);
+
+    int extract_blob_from_gray8(
+        const uint8_t* gray8,
+        uint16_t src_width,
+        uint16_t src_height,
+        const char* blob_name,
+        irdet_linux_blob_tensor_t* out_blob,
+        irdet_preprocess_stats_t* out_stats);
+
+    int extract_blob_from_runtime_tensor(
+        const float* runtime_input,
+        uint16_t src_width,
+        uint16_t src_height,
+        const char* blob_name,
+        irdet_linux_blob_tensor_t* out_blob,
         irdet_preprocess_stats_t* out_stats);
 
     const irdet_linux_runtime_config_t& config() const;

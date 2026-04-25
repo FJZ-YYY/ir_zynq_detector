@@ -237,6 +237,32 @@ chmod +x app/irdet_linux_ncnn_app app/irdet_linux_pl_dw3x3_tool lib/ld-linux-arm
 '@
 Write-LfAsciiFile -Path (Join-Path $bundleDir "run_demo_gray8_with_pl_real_layer.sh") -Content $runGray8WithPlRealLayer
 
+$runDumpRuntimeDwInput = @'
+#!/bin/sh
+set -eu
+DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+cd "$DIR"
+chmod +x app/irdet_linux_ncnn_app app/irdet_linux_pl_dw3x3_tool lib/ld-linux-armhf.so.3 || true
+./app/irdet_linux_ncnn_app \
+  --param ./model/irdet_ssdlite_ir_runtime_fixed_v2.param \
+  --bin ./model/irdet_ssdlite_ir_runtime_fixed_v2.bin \
+  --anchors ./model/anchors_xyxy_f32.bin \
+  --gray8 ./data/sample_gray8_640x512.bin \
+  --src-width 640 \
+  --src-height 512 \
+  --runtime-width 160 \
+  --runtime-height 128 \
+  --score-thresh-x1000 200 \
+  --iou-thresh-x1000 450 \
+  --mean 0.5 \
+  --std 0.5 \
+  --input-scale 0.00392156862745 \
+  --dump-blob /inner/backbone/features.0/features.0.3/conv/conv.0/conv.0.2/Clip_output_0 \
+  --dump-blob-out ./data/runtime_dw_input \
+  --blob-only
+'@
+Write-LfAsciiFile -Path (Join-Path $bundleDir "run_dump_runtime_dw_input.sh") -Content $runDumpRuntimeDwInput
+
 $runTensor = @'
 #!/bin/sh
 set -eu

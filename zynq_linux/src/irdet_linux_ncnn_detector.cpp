@@ -57,6 +57,16 @@ std::vector<float> mat_to_float_vector(const ncnn::Mat& mat) {
     return std::vector<float>(data, data + count);
 }
 
+irdet_linux_blob_tensor_t mat_to_blob_tensor(const ncnn::Mat& mat) {
+    irdet_linux_blob_tensor_t blob;
+    blob.values = mat_to_float_vector(mat);
+    blob.dims = mat.dims;
+    blob.w = mat.w;
+    blob.h = mat.h;
+    blob.c = mat.c;
+    return blob;
+}
+
 }  // namespace
 
 class irdet_linux_ncnn_detector::impl {
@@ -252,6 +262,91 @@ int irdet_linux_ncnn_detector::run_from_runtime_tensor(
         out_count);
     if (p_->last_postprocess_status != 0) {
         return -6;
+    }
+
+    return 0;
+}
+
+int irdet_linux_ncnn_detector::extract_blob_from_gray8(
+    const uint8_t* gray8,
+    uint16_t src_width,
+    uint16_t src_height,
+    const char* blob_name,
+    irdet_linux_blob_tensor_t* out_blob,
+    irdet_preprocess_stats_t* out_stats) {
+    irdet_preprocess_config_t pp_cfg;
+    int rc;
+
+    if (!p_->is_loaded || gray8 == NULL || blob_name == NULL || out_blob == NULL || out_stats == NULL) {
+        return -1;
+    }
+
+    pp_cfg.input_scale = p_->cfg.input_scale;
+    pp_cfg.mean = p_->cfg.mean;
+    pp_cfg.stddev = p_->cfg.stddev;
+    rc = irdet_preprocess_gray8_image(
+        gray8,
+        src_width,
+        src_height,
+        &pp_cfg,
+        p_->runtime_tensor.data(),
+        p_->cfg.runtime_input_width,
+        p_->cfg.runtime_input_height,
+        out_stats);
+    if (rc != 0) {
+        return -2;
+    }
+
+    return extract_blob_from_runtime_tensor(
+        p_->runtime_tensor.data(),
+        src_width,
+        src_height,
+        blob_name,
+        out_blob,
+        out_stats);
+}
+
+int irdet_linux_ncnn_detector::extract_blob_from_runtime_tensor(
+    const float* runtime_input,
+    uint16_t src_width,
+    uint16_t src_height,
+    const char* blob_name,
+    irdet_linux_blob_tensor_t* out_blob,
+    irdet_preprocess_stats_t* out_stats) {
+    ncnn::Mat input;
+    ncnn::Mat blob_out;
+
+    if (!p_->is_loaded || runtime_input == NULL || blob_name == NULL || out_blob == NULL || out_stats == NULL) {
+        return -1;
+    }
+
+    out_stats->src_width = src_width;
+    out_stats->src_height = src_height;
+    out_stats->dst_width = p_->cfg.runtime_input_width;
+    out_stats->dst_height = p_->cfg.runtime_input_height;
+
+    input = ncnn::Mat(
+        p_->cfg.runtime_input_width,
+        p_->cfg.runtime_input_height,
+        1,
+        const_cast<float*>(runtime_input),
+        (size_t)sizeof(float));
+    ncnn::Extractor extractor = p_->net.create_extractor();
+    extractor.set_light_mode(true);
+
+    p_->last_ncnn_status = extractor.input("input_0", input);
+    if (p_->last_ncnn_status != 0) {
+        return -2;
+    }
+    p_->last_ncnn_status = extractor.extract(blob_name, blob_out);
+    if (p_->last_ncnn_status != 0) {
+        return -3;
+    }
+
+    try {
+        *out_blob = mat_to_blob_tensor(blob_out);
+    } catch (const std::exception&) {
+        return -4;
     }
 
     return 0;

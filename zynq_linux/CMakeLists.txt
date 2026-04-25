@@ -21,13 +21,26 @@ endif()
 set(IRDET_ZYNQ_PS_INCLUDE "${IRDET_REPO_ROOT}/zynq_ps/include")
 set(IRDET_ZYNQ_PS_SRC "${IRDET_REPO_ROOT}/zynq_ps/src")
 
-add_executable(irdet_linux_ncnn_app
+set(IRDET_LINUX_NCNN_APP_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/src/irdet_linux_main.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/irdet_linux_ncnn_detector.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/src/irdet_linux_pl_dw3x3_probe.cpp"
     "${IRDET_ZYNQ_PS_SRC}/ir_image_preprocess.c"
     "${IRDET_ZYNQ_PS_SRC}/ir_ssd_postprocess.c"
     "${IRDET_ZYNQ_PS_SRC}/ir_pl_dw3x3_full.c"
+)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND IRDET_LINUX_NCNN_APP_SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/src/irdet_linux_pl_dw3x3_probe.cpp"
+    )
+else()
+    list(APPEND IRDET_LINUX_NCNN_APP_SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/src/irdet_linux_pl_dw3x3_probe_stub.cpp"
+    )
+endif()
+
+add_executable(irdet_linux_ncnn_app
+    ${IRDET_LINUX_NCNN_APP_SOURCES}
 )
 
 target_include_directories(irdet_linux_ncnn_app PRIVATE

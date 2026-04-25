@@ -382,6 +382,54 @@ This is the first verified board run where:
 - the detector app invokes the PL full-scheduler on a real exported layer case
 - PL returns the expected fixed-v2 first/last accumulators
 
+## Runtime Blob Dump For Next-Step PL Wiring
+
+The Linux detector app now supports dumping an arbitrary intermediate `ncnn`
+blob to a float32 binary file plus a small JSON metadata file. This is the
+bridge from "offline exported layer replay" to "runtime feature tensor capture".
+
+Example on the board:
+
+```sh
+./app/irdet_linux_ncnn_app \
+  --param ./model/irdet_ssdlite_ir_runtime_fixed_v2.param \
+  --bin ./model/irdet_ssdlite_ir_runtime_fixed_v2.bin \
+  --anchors ./model/anchors_xyxy_f32.bin \
+  --gray8 ./data/sample_gray8_640x512.bin \
+  --src-width 640 \
+  --src-height 512 \
+  --dump-blob /inner/backbone/features.0/features.0.3/conv/conv.0/conv.0.2/Clip_output_0 \
+  --dump-blob-out ./data/runtime_dw_input \
+  --blob-only
+```
+
+Expected extra line:
+
+```text
+blob_dump name=/inner/backbone/features.0/features.0.3/conv/conv.0/conv.0.2/Clip_output_0 dims=3 shape=[c=144,h=32,w=40] values=184320 bin=./data/runtime_dw_input.bin json=./data/runtime_dw_input.json
+```
+
+The companion PC-side helper to locate candidate depthwise blobs is:
+
+```powershell
+python G:\FPGA\ir_zynq_detector\pc\scripts\list_ncnn_depthwise_blobs.py `
+  --param G:\FPGA\ir_zynq_detector\build\ncnn_runtime_fixed_v2_tracer_op13_ncnn\irdet_ssdlite_ir_runtime_fixed_v2.param `
+  --match "features.0.3"
+```
+
+This is the recommended next step before replacing the current replay-based PL
+call with a true runtime feature-map handoff.
+
+For the current fixed-v2 target depthwise input blob on the AC880 serial path:
+
+```powershell
+powershell -ExecutionPolicy Bypass `
+  -File G:\FPGA\ir_zynq_detector\pc\scripts\run_ac880_linux_serial_demo.ps1 `
+  -RepoRoot G:\FPGA\ir_zynq_detector `
+  -ComPort COM3 `
+  -Mode dump_runtime_dw_input
+```
+
 ## Serial Update Fallback
 
 When SSH upload is unavailable, the project now has a serial-only file update

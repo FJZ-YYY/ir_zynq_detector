@@ -19,10 +19,13 @@ struct cli_args_t {
     std::string gray8_path;
     std::string tensor_path;
     std::string pl_real_layer_dir;
+    std::string dump_blob_name;
+    std::string dump_blob_out_prefix;
     uint16_t src_width = 0U;
     uint16_t src_height = 0U;
     bool run_pl_probe_full = false;
     bool run_pl_real_layer = false;
+    bool blob_only = false;
     irdet_linux_runtime_config_t cfg;
     irdet_linux_pl_dw3x3_full_probe_config_t pl_probe_cfg;
     irdet_linux_pl_dw3x3_real_layer_case_config_t pl_real_layer_cfg;
@@ -36,7 +39,8 @@ void print_usage() {
         "                       [--tensor-f32 <input_f32.bin> --src-width <w> --src-height <h>]\n"
         "                       [--runtime-width 160 --runtime-height 128 --mean 0.5 --std 0.5]\n"
         "                       [--pl-probe-full --pl-full-base 0x43C10000]\n"
-        "                       [--pl-real-layer-dir <case_dir>]\n",
+        "                       [--pl-real-layer-dir <case_dir>]\n"
+        "                       [--dump-blob <name> --dump-blob-out <prefix> [--blob-only]]\n",
         stdout);
     std::fflush(stdout);
 }
@@ -75,6 +79,90 @@ std::vector<float> read_f32_file(const std::string& path) {
         stream.read(reinterpret_cast<char*>(data.data()), bytes);
     }
     return data;
+}
+
+void write_f32_file(const std::string& path, const std::vector<float>& data) {
+    std::ofstream stream(path.c_str(), std::ios::binary);
+    if (!stream) {
+        throw std::runtime_error("failed to open output file: " + path);
+    }
+    if (!data.empty()) {
+        stream.write(reinterpret_cast<const char*>(data.data()), (std::streamsize)(data.size() * sizeof(float)));
+        if (!stream) {
+            throw std::runtime_error("failed to write output file: " + path);
+        }
+    }
+}
+
+std::string json_escape(const std::string& input) {
+    std::string out;
+    size_t i;
+    out.reserve(input.size() + 8U);
+    for (i = 0U; i < input.size(); ++i) {
+        const char ch = input[i];
+        switch (ch) {
+        case '\\':
+            out += "\\\\";
+            break;
+        case '"':
+            out += "\\\"";
+            break;
+        case '\n':
+            out += "\\n";
+            break;
+        case '\r':
+            out += "\\r";
+            break;
+        case '\t':
+            out += "\\t";
+            break;
+        default:
+            out += ch;
+            break;
+        }
+    }
+    return out;
+}
+
+void write_blob_metadata_json(
+    const std::string& path,
+    const std::string& blob_name,
+    const irdet_linux_blob_tensor_t& blob,
+    const irdet_preprocess_stats_t& stats) {
+    std::ofstream stream(path.c_str(), std::ios::binary);
+    if (!stream) {
+        throw std::runtime_error("failed to open metadata file: " + path);
+    }
+    stream
+        << "{\n"
+        << "  \"blob_name\": \"" << json_escape(blob_name) << "\",\n"
+        << "  \"dims\": " << blob.dims << ",\n"
+        << "  \"w\": " << blob.w << ",\n"
+        << "  \"h\": " << blob.h << ",\n"
+        << "  \"c\": " << blob.c << ",\n"
+        << "  \"num_values\": " << blob.values.size() << ",\n"
+        << "  \"src_width\": " << stats.src_width << ",\n"
+        << "  \"src_height\": " << stats.src_height << ",\n"
+        << "  \"runtime_width\": " << stats.dst_width << ",\n"
+        << "  \"runtime_height\": " << stats.dst_height << "\n"
+        << "}\n";
+    if (!stream) {
+        throw std::runtime_error("failed to write metadata file: " + path);
+    }
+}
+
+std::string blob_bin_path_from_prefix(const std::string& prefix) {
+    if (prefix.size() >= 4U && prefix.substr(prefix.size() - 4U) == ".bin") {
+        return prefix;
+    }
+    return prefix + ".bin";
+}
+
+std::string blob_json_path_from_prefix(const std::string& prefix) {
+    if (prefix.size() >= 4U && prefix.substr(prefix.size() - 4U) == ".bin") {
+        return prefix.substr(0U, prefix.size() - 4U) + ".json";
+    }
+    return prefix + ".json";
 }
 
 bool consume_value(int argc, char** argv, int& i, std::string* out) {
@@ -185,6 +273,16 @@ bool parse_args(int argc, char** argv, cli_args_t* args) {
                 return false;
             }
             args->run_pl_real_layer = true;
+        } else if (opt == "--dump-blob") {
+            if (!consume_value(argc, argv, i, &args->dump_blob_name)) {
+                return false;
+            }
+        } else if (opt == "--dump-blob-out") {
+            if (!consume_value(argc, argv, i, &args->dump_blob_out_prefix)) {
+                return false;
+            }
+        } else if (opt == "--blob-only") {
+            args->blob_only = true;
         } else if (opt == "--pl-full-base") {
             std::string text;
             char* end_ptr = NULL;
@@ -213,6 +311,9 @@ bool parse_args(int argc, char** argv, cli_args_t* args) {
         return false;
     }
     if (args->src_width == 0U || args->src_height == 0U) {
+        return false;
+    }
+    if (args->dump_blob_name.empty() != args->dump_blob_out_prefix.empty()) {
         return false;
     }
     return true;
@@ -244,6 +345,7 @@ int main(int argc, char** argv) {
     irdet_linux_ncnn_detector detector;
     irdet_detection_t detections[IRDET_MAX_DETECTIONS];
     irdet_preprocess_stats_t stats = {};
+    irdet_linux_blob_tensor_t blob = {};
     irdet_linux_pl_dw3x3_full_probe_result_t pl_probe_result = {};
     irdet_linux_pl_dw3x3_real_layer_case_result_t pl_real_layer_result = {};
     uint32_t out_count = 0U;
@@ -345,6 +447,84 @@ int main(int argc, char** argv) {
             pl_real_layer_result.e2e_us,
             pl_real_layer_result.compute_us);
         std::fflush(stdout);
+    }
+
+    if (!args.dump_blob_name.empty()) {
+        try {
+            if (!args.gray8_path.empty()) {
+                std::vector<uint8_t> gray8 = read_u8_file(args.gray8_path);
+                const size_t expected = (size_t)args.src_width * (size_t)args.src_height;
+                if (gray8.size() != expected) {
+                    std::fprintf(stderr, "gray8 input size mismatch bytes=%zu expected=%zu\n", gray8.size(), expected);
+                    std::fflush(stderr);
+                    return 3;
+                }
+                rc = detector.extract_blob_from_gray8(
+                    gray8.data(),
+                    args.src_width,
+                    args.src_height,
+                    args.dump_blob_name.c_str(),
+                    &blob,
+                    &stats);
+            } else {
+                std::vector<float> tensor = read_f32_file(args.tensor_path);
+                const size_t expected = (size_t)args.cfg.runtime_input_width * (size_t)args.cfg.runtime_input_height;
+                if (tensor.size() != expected) {
+                    std::fprintf(stderr, "tensor input size mismatch elems=%zu expected=%zu\n", tensor.size(), expected);
+                    std::fflush(stderr);
+                    return 4;
+                }
+                rc = detector.extract_blob_from_runtime_tensor(
+                    tensor.data(),
+                    args.src_width,
+                    args.src_height,
+                    args.dump_blob_name.c_str(),
+                    &blob,
+                    &stats);
+            }
+        } catch (const std::exception& exc) {
+            std::fprintf(stderr, "blob input error: %s\n", exc.what());
+            std::fflush(stderr);
+            return 9;
+        }
+
+        if (rc != 0) {
+            std::fprintf(
+                stderr,
+                "blob extract failed rc=%d blob=%s last_ncnn=%d\n",
+                rc,
+                args.dump_blob_name.c_str(),
+                detector.last_ncnn_status());
+            std::fflush(stderr);
+            return 10;
+        }
+
+        try {
+            const std::string blob_bin_path = blob_bin_path_from_prefix(args.dump_blob_out_prefix);
+            const std::string blob_json_path = blob_json_path_from_prefix(args.dump_blob_out_prefix);
+            write_f32_file(blob_bin_path, blob.values);
+            write_blob_metadata_json(blob_json_path, args.dump_blob_name, blob, stats);
+            std::fprintf(
+                stdout,
+                "blob_dump name=%s dims=%d shape=[c=%d,h=%d,w=%d] values=%zu bin=%s json=%s\n",
+                args.dump_blob_name.c_str(),
+                blob.dims,
+                blob.c,
+                blob.h,
+                blob.w,
+                blob.values.size(),
+                blob_bin_path.c_str(),
+                blob_json_path.c_str());
+            std::fflush(stdout);
+        } catch (const std::exception& exc) {
+            std::fprintf(stderr, "blob write failed: %s\n", exc.what());
+            std::fflush(stderr);
+            return 11;
+        }
+
+        if (args.blob_only) {
+            return 0;
+        }
     }
 
     try {

@@ -324,6 +324,29 @@ Resource note:
   - DSP `4`
 - final routed WNS is `5.079 ns` at 50 MHz
 
+### 11. Linux runtime can now dump intermediate NCNN blobs
+
+Files:
+
+- `zynq_linux/include/irdet_linux_ncnn_detector.h`
+- `zynq_linux/src/irdet_linux_ncnn_detector.cpp`
+- `zynq_linux/src/irdet_linux_main.cpp`
+- `pc/scripts/list_ncnn_depthwise_blobs.py`
+
+Behavior:
+
+- the Linux detector app can now extract an arbitrary named `ncnn` blob
+- the blob is written as `float32` binary plus JSON shape metadata
+- a PC-side helper can list all `ConvolutionDepthWise` blob names from the
+  fixed-v2 `ncnn` param file
+
+Result:
+
+- the project now has a direct path to capture a real runtime feature tensor
+  from the deployed detector graph
+- this is the bridge from "offline replay validation" to "real inference-path
+  PL call integration"
+
 ## PS-side Progress Related To Real Deployment
 
 The PS side already has a real SSD raw-head postprocess path:
