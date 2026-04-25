@@ -71,6 +71,17 @@ irdet_linux_blob_tensor_t mat_to_blob_tensor(const ncnn::Mat& mat) {
 
 class irdet_linux_ncnn_detector::impl {
 public:
+    int run_detector(
+        const float* runtime_input,
+        uint16_t src_width,
+        uint16_t src_height,
+        const char* override_blob_name,
+        const irdet_linux_blob_tensor_t* override_blob,
+        irdet_detection_t* out_detections,
+        uint32_t max_detections,
+        uint32_t* out_count,
+        irdet_preprocess_stats_t* out_stats);
+
     ncnn::Net net;
     irdet_linux_runtime_config_t cfg;
     std::vector<float> anchors_xyxy;
@@ -79,6 +90,116 @@ public:
     int last_postprocess_status = 0;
     bool is_loaded = false;
 };
+
+int irdet_linux_ncnn_detector::impl::run_detector(
+    const float* runtime_input,
+    uint16_t src_width,
+    uint16_t src_height,
+    const char* override_blob_name,
+    const irdet_linux_blob_tensor_t* override_blob,
+    irdet_detection_t* out_detections,
+    uint32_t max_detections,
+    uint32_t* out_count,
+    irdet_preprocess_stats_t* out_stats) {
+    const bool use_override = (override_blob_name != NULL || override_blob != NULL);
+    ncnn::Mat input;
+    ncnn::Mat bbox_out;
+    ncnn::Mat cls_out;
+    std::vector<float> bbox_values;
+    std::vector<float> cls_values;
+    irdet_ssd_postprocess_config_t pp_cfg;
+    irdet_ssd_raw_head_tensors_t tensors;
+
+    if (!is_loaded || runtime_input == NULL || out_detections == NULL || out_count == NULL || out_stats == NULL) {
+        return -1;
+    }
+
+    out_stats->src_width = src_width;
+    out_stats->src_height = src_height;
+    out_stats->dst_width = cfg.runtime_input_width;
+    out_stats->dst_height = cfg.runtime_input_height;
+
+    input = ncnn::Mat(
+        cfg.runtime_input_width,
+        cfg.runtime_input_height,
+        1,
+        const_cast<float*>(runtime_input),
+        (size_t)sizeof(float));
+    ncnn::Extractor extractor = net.create_extractor();
+    extractor.set_light_mode(true);
+
+    last_ncnn_status = extractor.input("input_0", input);
+    if (last_ncnn_status != 0) {
+        return -2;
+    }
+
+    if (use_override) {
+        ncnn::Mat override_mat;
+        size_t expected_values = 0U;
+        if (override_blob_name == NULL || override_blob == NULL) {
+            return -7;
+        }
+        if (override_blob->dims != 3 || override_blob->w <= 0 || override_blob->h <= 0 || override_blob->c <= 0) {
+            return -8;
+        }
+        expected_values =
+            (size_t)override_blob->w * (size_t)override_blob->h * (size_t)override_blob->c;
+        if (override_blob->values.size() != expected_values) {
+            return -9;
+        }
+        override_mat = ncnn::Mat(
+            override_blob->w,
+            override_blob->h,
+            override_blob->c,
+            const_cast<float*>(override_blob->values.data()),
+            (size_t)sizeof(float));
+        last_ncnn_status = extractor.input(override_blob_name, override_mat);
+        if (last_ncnn_status != 0) {
+            return -10;
+        }
+    }
+
+    last_ncnn_status = extractor.extract("bbox_regression", bbox_out);
+    if (last_ncnn_status != 0) {
+        return -3;
+    }
+    last_ncnn_status = extractor.extract("cls_logits", cls_out);
+    if (last_ncnn_status != 0) {
+        return -4;
+    }
+
+    try {
+        bbox_values = mat_to_float_vector(bbox_out);
+        cls_values = mat_to_float_vector(cls_out);
+    } catch (const std::exception&) {
+        return -5;
+    }
+
+    irdet_ssd_postprocess_get_default_config(&pp_cfg);
+    pp_cfg.input_width = cfg.runtime_input_width;
+    pp_cfg.input_height = cfg.runtime_input_height;
+    pp_cfg.score_threshold_x1000 = cfg.score_threshold_x1000;
+    pp_cfg.iou_threshold_x1000 = cfg.iou_threshold_x1000;
+
+    tensors.bbox_regression = bbox_values.data();
+    tensors.cls_logits = cls_values.data();
+    tensors.anchors_xyxy = anchors_xyxy.data();
+    tensors.num_anchors = (uint32_t)(anchors_xyxy.size() / IRDET_SSD_BOX_VALUES);
+    tensors.num_classes_with_bg = IRDET_SSD_NUM_CLASSES_WITH_BG;
+
+    last_postprocess_status = irdet_ssd_postprocess_run(
+        &tensors,
+        &pp_cfg,
+        out_stats,
+        out_detections,
+        max_detections,
+        out_count);
+    if (last_postprocess_status != 0) {
+        return -6;
+    }
+
+    return 0;
+}
 
 void irdet_linux_runtime_get_default_config(irdet_linux_runtime_config_t* cfg) {
     if (cfg == NULL) {
@@ -187,6 +308,52 @@ int irdet_linux_ncnn_detector::run_from_gray8(
         out_stats);
 }
 
+int irdet_linux_ncnn_detector::run_from_gray8_with_blob_override(
+    const uint8_t* gray8,
+    uint16_t src_width,
+    uint16_t src_height,
+    const char* override_blob_name,
+    const irdet_linux_blob_tensor_t* override_blob,
+    irdet_detection_t* out_detections,
+    uint32_t max_detections,
+    uint32_t* out_count,
+    irdet_preprocess_stats_t* out_stats) {
+    irdet_preprocess_config_t pp_cfg;
+    int rc;
+
+    if (!p_->is_loaded || gray8 == NULL || override_blob_name == NULL || override_blob == NULL ||
+        out_detections == NULL || out_count == NULL || out_stats == NULL) {
+        return -1;
+    }
+
+    pp_cfg.input_scale = p_->cfg.input_scale;
+    pp_cfg.mean = p_->cfg.mean;
+    pp_cfg.stddev = p_->cfg.stddev;
+    rc = irdet_preprocess_gray8_image(
+        gray8,
+        src_width,
+        src_height,
+        &pp_cfg,
+        p_->runtime_tensor.data(),
+        p_->cfg.runtime_input_width,
+        p_->cfg.runtime_input_height,
+        out_stats);
+    if (rc != 0) {
+        return -2;
+    }
+
+    return run_from_runtime_tensor_with_blob_override(
+        p_->runtime_tensor.data(),
+        src_width,
+        src_height,
+        override_blob_name,
+        override_blob,
+        out_detections,
+        max_detections,
+        out_count,
+        out_stats);
+}
+
 int irdet_linux_ncnn_detector::run_from_runtime_tensor(
     const float* runtime_input,
     uint16_t src_width,
@@ -195,76 +362,38 @@ int irdet_linux_ncnn_detector::run_from_runtime_tensor(
     uint32_t max_detections,
     uint32_t* out_count,
     irdet_preprocess_stats_t* out_stats) {
-    ncnn::Mat input;
-    ncnn::Mat bbox_out;
-    ncnn::Mat cls_out;
-    std::vector<float> bbox_values;
-    std::vector<float> cls_values;
-    irdet_ssd_postprocess_config_t pp_cfg;
-    irdet_ssd_raw_head_tensors_t tensors;
-
-    if (!p_->is_loaded || runtime_input == NULL || out_detections == NULL || out_count == NULL || out_stats == NULL) {
-        return -1;
-    }
-
-    out_stats->src_width = src_width;
-    out_stats->src_height = src_height;
-    out_stats->dst_width = p_->cfg.runtime_input_width;
-    out_stats->dst_height = p_->cfg.runtime_input_height;
-
-    input = ncnn::Mat(
-        p_->cfg.runtime_input_width,
-        p_->cfg.runtime_input_height,
-        1,
-        const_cast<float*>(runtime_input),
-        (size_t)sizeof(float));
-    ncnn::Extractor extractor = p_->net.create_extractor();
-    extractor.set_light_mode(true);
-
-    p_->last_ncnn_status = extractor.input("input_0", input);
-    if (p_->last_ncnn_status != 0) {
-        return -2;
-    }
-    p_->last_ncnn_status = extractor.extract("bbox_regression", bbox_out);
-    if (p_->last_ncnn_status != 0) {
-        return -3;
-    }
-    p_->last_ncnn_status = extractor.extract("cls_logits", cls_out);
-    if (p_->last_ncnn_status != 0) {
-        return -4;
-    }
-
-    try {
-        bbox_values = mat_to_float_vector(bbox_out);
-        cls_values = mat_to_float_vector(cls_out);
-    } catch (const std::exception&) {
-        return -5;
-    }
-
-    irdet_ssd_postprocess_get_default_config(&pp_cfg);
-    pp_cfg.input_width = p_->cfg.runtime_input_width;
-    pp_cfg.input_height = p_->cfg.runtime_input_height;
-    pp_cfg.score_threshold_x1000 = p_->cfg.score_threshold_x1000;
-    pp_cfg.iou_threshold_x1000 = p_->cfg.iou_threshold_x1000;
-
-    tensors.bbox_regression = bbox_values.data();
-    tensors.cls_logits = cls_values.data();
-    tensors.anchors_xyxy = p_->anchors_xyxy.data();
-    tensors.num_anchors = (uint32_t)(p_->anchors_xyxy.size() / IRDET_SSD_BOX_VALUES);
-    tensors.num_classes_with_bg = IRDET_SSD_NUM_CLASSES_WITH_BG;
-
-    p_->last_postprocess_status = irdet_ssd_postprocess_run(
-        &tensors,
-        &pp_cfg,
-        out_stats,
+    return p_->run_detector(
+        runtime_input,
+        src_width,
+        src_height,
+        NULL,
+        NULL,
         out_detections,
         max_detections,
-        out_count);
-    if (p_->last_postprocess_status != 0) {
-        return -6;
-    }
+        out_count,
+        out_stats);
+}
 
-    return 0;
+int irdet_linux_ncnn_detector::run_from_runtime_tensor_with_blob_override(
+    const float* runtime_input,
+    uint16_t src_width,
+    uint16_t src_height,
+    const char* override_blob_name,
+    const irdet_linux_blob_tensor_t* override_blob,
+    irdet_detection_t* out_detections,
+    uint32_t max_detections,
+    uint32_t* out_count,
+    irdet_preprocess_stats_t* out_stats) {
+    return p_->run_detector(
+        runtime_input,
+        src_width,
+        src_height,
+        override_blob_name,
+        override_blob,
+        out_detections,
+        max_detections,
+        out_count,
+        out_stats);
 }
 
 int irdet_linux_ncnn_detector::extract_blob_from_gray8(

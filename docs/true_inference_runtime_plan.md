@@ -1,5 +1,23 @@
 # True Inference Runtime Plan
 
+## 2026-04-26 Status Update
+
+The project has now passed the originally planned "true inference" milestone for
+the selected MobileNetV2 depthwise layer.
+
+Current board-verified result:
+
+- `runtime_dw_pl_compare` still passes for the runtime blob and PL quantized
+  contract
+- `inpath_dw_cpu_full` passes for `prefix + CPU depthwise + suffix`
+- `inpath_dw_pl_full` passes for `prefix + PL loop all channels + suffix`
+- detector output remains valid after PL reinjection
+
+Related documents:
+
+- `docs/inpath_dw_stage_report.md`
+- `docs/inpath_dw_regression.md`
+
 ## Current Status
 
 The board has verified these pieces in one UART demo path:

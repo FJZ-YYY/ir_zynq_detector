@@ -15,8 +15,10 @@ $archivePath = Join-Path $RepoRoot "build\ac880_real_layer_serial_update.tar.gz"
 $packageScript = Join-Path $RepoRoot "pc\scripts\package_zynq_linux_demo.ps1"
 $uploadScript = Join-Path $RepoRoot "pc\scripts\upload_file_over_serial.py"
 $serialInvokeScript = Join-Path $RepoRoot "pc\scripts\invoke_ac880_serial_command.ps1"
+$python = Join-Path $RepoRoot ".venv-train\Scripts\python.exe"
+$plCaseDir = Join-Path $bundleDir "data\pl_real_layer_case"
 
-foreach ($path in @($packageScript, $uploadScript, $serialInvokeScript)) {
+foreach ($path in @($packageScript, $uploadScript, $serialInvokeScript, $python)) {
   if (!(Test-Path $path)) {
     throw "Script not found: $path"
   }
@@ -34,6 +36,87 @@ if (!(Test-Path $bundleDir)) {
   throw "Bundle directory not found: $bundleDir"
 }
 
+if (!(Test-Path $plCaseDir)) {
+  throw "Missing real-layer case directory: $plCaseDir"
+}
+
+$plCaseFiles = Get-ChildItem -Path $plCaseDir -File | Sort-Object Name
+if ($plCaseFiles.Count -eq 0) {
+  throw "No real-layer case files found in: $plCaseDir"
+}
+
+$plCaseExpectedSizes = @{}
+foreach ($file in $plCaseFiles) {
+  $plCaseExpectedSizes[$file.Name] = [int64]$file.Length
+}
+
+function Invoke-SerialCommands {
+  param(
+    [string[]]$Commands,
+    [int]$InterCommandDelayMs = 500,
+    [int]$IdleThresholdMs = 2000,
+    [int]$MaxReadSeconds = 45
+  )
+
+  $output = & $serialInvokeScript `
+    -ComPort $ComPort `
+    -BaudRate $BaudRate `
+    -Commands $Commands `
+    -InterCommandDelayMs $InterCommandDelayMs `
+    -IdleThresholdMs $IdleThresholdMs `
+    -MaxReadSeconds $MaxReadSeconds
+  if ($LASTEXITCODE -ne 0) {
+    throw "invoke_ac880_serial_command.ps1 failed with exit code $LASTEXITCODE"
+  }
+  return $output
+}
+
+function Get-RemotePlCaseSizes {
+  $remotePaths = $plCaseFiles | ForEach-Object {
+    "$RemoteDir/data/pl_real_layer_case/$($_.Name)"
+  }
+  $wcCommand = "wc -c " + ($remotePaths -join " ")
+  $output = Invoke-SerialCommands `
+    -Commands @("cd $RemoteDir", $wcCommand) `
+    -InterCommandDelayMs 700 `
+    -IdleThresholdMs 4000 `
+    -MaxReadSeconds 60
+
+  $sizes = @{}
+  foreach ($line in ($output -split "`r?`n")) {
+    if ($line -match '^\s*(\d+)\s+.*?/data/pl_real_layer_case/([^/\s]+)\s*$') {
+      $sizes[$matches[2]] = [int64]$matches[1]
+    }
+  }
+  return $sizes
+}
+
+function Upload-PlCaseFilesDirectly {
+  Write-Warning "Real-layer case files on target were incomplete after archive extraction. Uploading them individually over serial..."
+  foreach ($file in $plCaseFiles) {
+    $remotePath = "$RemoteDir/data/pl_real_layer_case/$($file.Name)"
+    Write-Host "Uploading $($file.Name) -> $remotePath"
+    & $python $uploadScript `
+      --port $ComPort `
+      --baud $BaudRate `
+      --local-file $file.FullName `
+      --remote-path $remotePath `
+      --chmod 644 `
+      --upload-chunk-bytes 8192 `
+      --bytes-per-line 64 `
+      --line-delay-ms 2 `
+      --batch-lines 16 `
+      --batch-delay-ms 40 `
+      --heredoc-enter-delay 0.8 `
+      --heredoc-exit-delay 0.8 `
+      --max-seconds 240 `
+      --disable-echo
+    if ($LASTEXITCODE -ne 0) {
+      throw "upload_file_over_serial.py failed for $($file.Name) with exit code $LASTEXITCODE"
+    }
+  }
+}
+
 Write-Host "Creating minimal real-layer serial update archive..."
 $env:IRDET_BUNDLE_DIR = $bundleDir
 $env:IRDET_ARCHIVE_PATH = $archivePath
@@ -46,6 +129,7 @@ archive_path = os.environ["IRDET_ARCHIVE_PATH"]
 members = [
     "app/irdet_linux_ncnn_app",
     "run_demo_gray8_with_pl_real_layer.sh",
+    "run_demo_runtime_dw_pl_compare.sh",
     "bundle_manifest.json",
     "README.txt",
 ]
@@ -67,7 +151,7 @@ with tarfile.open(archive_path, "w:gz") as tar:
         tar.add(local_path, arcname=rel)
 
 print(f"SERIAL_UPDATE_ARCHIVE_OK {archive_path}")
-'@ | python -
+'@ | & $python -
 if ($LASTEXITCODE -ne 0) {
   throw "Failed to build serial update archive"
 }
@@ -75,11 +159,19 @@ if ($LASTEXITCODE -ne 0) {
 Get-Item $archivePath | Select-Object FullName,Length,LastWriteTime | Format-Table -AutoSize
 
 Write-Host "Uploading archive over serial to $RemoteTmpArchive ..."
-& python $uploadScript `
+& $python $uploadScript `
   --port $ComPort `
   --baud $BaudRate `
   --local-file $archivePath `
   --remote-path $RemoteTmpArchive `
+  --upload-chunk-bytes 8192 `
+  --bytes-per-line 64 `
+  --line-delay-ms 2 `
+  --batch-lines 16 `
+  --batch-delay-ms 40 `
+  --heredoc-enter-delay 0.8 `
+  --heredoc-exit-delay 0.8 `
+  --max-seconds 180 `
   --disable-echo
 if ($LASTEXITCODE -ne 0) {
   throw "upload_file_over_serial.py failed with exit code $LASTEXITCODE"
@@ -88,7 +180,7 @@ if ($LASTEXITCODE -ne 0) {
 $commands = @(
   "mkdir -p $RemoteDir/data/pl_real_layer_case",
   "tar -xzf $RemoteTmpArchive -C $RemoteDir",
-  "chmod +x $RemoteDir/run_demo_gray8_with_pl_real_layer.sh $RemoteDir/app/irdet_linux_ncnn_app",
+  "chmod +x $RemoteDir/run_demo_gray8_with_pl_real_layer.sh $RemoteDir/run_demo_runtime_dw_pl_compare.sh $RemoteDir/app/irdet_linux_ncnn_app",
   "rm -f $RemoteTmpArchive",
   "ls -la $RemoteDir",
   "ls -la $RemoteDir/data/pl_real_layer_case"
@@ -102,13 +194,33 @@ if ($RunDemo) {
 }
 
 Write-Host "Extracting update archive on AC880 over serial..."
-& powershell -ExecutionPolicy Bypass -File $serialInvokeScript `
-  -ComPort $ComPort `
-  -BaudRate $BaudRate `
+$null = Invoke-SerialCommands `
   -Commands $commands `
   -InterCommandDelayMs 500 `
   -IdleThresholdMs 2000 `
   -MaxReadSeconds 45
-if ($LASTEXITCODE -ne 0) {
-  throw "invoke_ac880_serial_command.ps1 failed with exit code $LASTEXITCODE"
+
+$remotePlCaseSizes = Get-RemotePlCaseSizes
+$needsDirectUpload = $false
+foreach ($file in $plCaseFiles) {
+  $remoteSize = $remotePlCaseSizes[$file.Name]
+  if ($null -eq $remoteSize -or $remoteSize -ne $plCaseExpectedSizes[$file.Name]) {
+    $expected = $plCaseExpectedSizes[$file.Name]
+    $actual = if ($null -eq $remoteSize) { "<missing>" } else { "$remoteSize" }
+    Write-Warning "Target case file size mismatch for $($file.Name): expected=$expected actual=$actual"
+    $needsDirectUpload = $true
+  }
+}
+
+if ($needsDirectUpload) {
+  Upload-PlCaseFilesDirectly
+  $remotePlCaseSizes = Get-RemotePlCaseSizes
+  foreach ($file in $plCaseFiles) {
+    $remoteSize = $remotePlCaseSizes[$file.Name]
+    $expected = $plCaseExpectedSizes[$file.Name]
+    if ($null -eq $remoteSize -or $remoteSize -ne $expected) {
+      $actual = if ($null -eq $remoteSize) { "<missing>" } else { "$remoteSize" }
+      throw "Target case file verification failed after direct upload for $($file.Name): expected=$expected actual=$actual"
+    }
+  }
 }

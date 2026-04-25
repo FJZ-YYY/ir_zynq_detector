@@ -2,7 +2,7 @@ param(
   [string]$RepoRoot = "G:\FPGA\ir_zynq_detector",
   [string]$ComPort = "COM3",
   [int]$BaudRate = 115200,
-  [ValidateSet("gray8", "gray8_pl_probe", "gray8_pl_real_layer", "dump_runtime_dw_input", "pl_selftest")]
+  [ValidateSet("gray8", "gray8_pl_probe", "gray8_pl_real_layer", "dump_runtime_dw_input", "runtime_dw_pl_compare", "inpath_dw_cpu_full", "inpath_dw_pl_full", "pl_selftest")]
   [string]$Mode = "gray8",
   [switch]$RunBootSelftest
 )

@@ -1,6 +1,7 @@
 param(
   [string]$RepoRoot = "G:\FPGA\ir_zynq_detector",
-  [string]$RemoteDir = "/home/root/irdet_demo"
+  [string]$RemoteDir = "/home/root/irdet_demo",
+  [switch]$SkipArmBuild
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,9 +28,7 @@ $exportAssets = Join-Path $RepoRoot "pc\scripts\export_linux_ncnn_demo_assets.py
 $exportLayerCase = Join-Path $RepoRoot "pc\scripts\export_depthwise_layer_case.py"
 $exportFullChannel = Join-Path $RepoRoot "pc\scripts\export_depthwise_full_channel.py"
 $checkContract = Join-Path $RepoRoot "pc\scripts\check_deploy_contract.py"
-$patchElf = Join-Path $RepoRoot "pc\scripts\patch_linux_elf_interpreter.py"
 $python = Join-Path $RepoRoot ".venv-train\Scripts\python.exe"
-$hostPython = "python"
 
 function Write-LfAsciiFile {
   param(
@@ -49,7 +48,6 @@ if (!(Test-Path $exportAssets)) { throw "Script not found: $exportAssets" }
 if (!(Test-Path $exportLayerCase)) { throw "Script not found: $exportLayerCase" }
 if (!(Test-Path $exportFullChannel)) { throw "Script not found: $exportFullChannel" }
 if (!(Test-Path $checkContract)) { throw "Script not found: $checkContract" }
-if (!(Test-Path $patchElf)) { throw "Script not found: $patchElf" }
 
 Write-Host "Refreshing Linux demo assets..."
 & $python $exportAssets `
@@ -88,16 +86,20 @@ if ($LASTEXITCODE -ne 0) {
   throw "export_depthwise_full_channel.py failed with exit code $LASTEXITCODE"
 }
 
-Write-Host "Rebuilding ARM Linux ncnn..."
-& powershell -ExecutionPolicy Bypass -File $buildArmNcnn -RepoRoot $RepoRoot
-if ($LASTEXITCODE -ne 0) {
-  throw "build_ncnn_arm_linux_min.ps1 failed with exit code $LASTEXITCODE"
-}
+if ($SkipArmBuild.IsPresent) {
+  Write-Host "Skipping ARM rebuild and reusing existing ARM artifacts..."
+} else {
+  Write-Host "Rebuilding ARM Linux ncnn..."
+  & powershell -ExecutionPolicy Bypass -File $buildArmNcnn -RepoRoot $RepoRoot
+  if ($LASTEXITCODE -ne 0) {
+    throw "build_ncnn_arm_linux_min.ps1 failed with exit code $LASTEXITCODE"
+  }
 
-Write-Host "Rebuilding ARM Linux detector app..."
-& powershell -ExecutionPolicy Bypass -File $buildArmApp -RepoRoot $RepoRoot
-if ($LASTEXITCODE -ne 0) {
-  throw "build_zynq_linux_arm_ncnn.ps1 failed with exit code $LASTEXITCODE"
+  Write-Host "Rebuilding ARM Linux detector app..."
+  & powershell -ExecutionPolicy Bypass -File $buildArmApp -RepoRoot $RepoRoot
+  if ($LASTEXITCODE -ne 0) {
+    throw "build_zynq_linux_arm_ncnn.ps1 failed with exit code $LASTEXITCODE"
+  }
 }
 
 Write-Host "Checking deployment contract compatibility..."
@@ -155,24 +157,13 @@ foreach ($runtimeLib in $runtimeLibs) {
   Copy-Item $runtimeLib.Source (Join-Path $bundleDir $runtimeLib.Target)
 }
 
-Write-Host "Patching ARM ELF interpreter/RUNPATH for remote bundle root $RemoteDir ..."
-foreach ($elfPath in @(
-  (Join-Path $bundleDir "app\irdet_linux_ncnn_app"),
-  (Join-Path $bundleDir "app\irdet_linux_pl_dw3x3_tool")
-)) {
-  & $hostPython $patchElf --input $elfPath --runtime-root $RemoteDir --in-place
-  if ($LASTEXITCODE -ne 0) {
-    throw "patch_linux_elf_interpreter.py failed for $elfPath with exit code $LASTEXITCODE"
-  }
-}
-
 $runGray8 = @'
 #!/bin/sh
 set -eu
 DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 cd "$DIR"
 chmod +x app/irdet_linux_ncnn_app app/irdet_linux_pl_dw3x3_tool lib/ld-linux-armhf.so.3 || true
-./app/irdet_linux_ncnn_app \
+./lib/ld-linux-armhf.so.3 --library-path ./lib ./app/irdet_linux_ncnn_app \
   --param ./model/irdet_ssdlite_ir_runtime_fixed_v2.param \
   --bin ./model/irdet_ssdlite_ir_runtime_fixed_v2.bin \
   --anchors ./model/anchors_xyxy_f32.bin \
@@ -195,7 +186,7 @@ set -eu
 DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 cd "$DIR"
 chmod +x app/irdet_linux_ncnn_app app/irdet_linux_pl_dw3x3_tool lib/ld-linux-armhf.so.3 || true
-./app/irdet_linux_ncnn_app \
+./lib/ld-linux-armhf.so.3 --library-path ./lib ./app/irdet_linux_ncnn_app \
   --param ./model/irdet_ssdlite_ir_runtime_fixed_v2.param \
   --bin ./model/irdet_ssdlite_ir_runtime_fixed_v2.bin \
   --anchors ./model/anchors_xyxy_f32.bin \
@@ -219,7 +210,7 @@ set -eu
 DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 cd "$DIR"
 chmod +x app/irdet_linux_ncnn_app app/irdet_linux_pl_dw3x3_tool lib/ld-linux-armhf.so.3 || true
-./app/irdet_linux_ncnn_app \
+./lib/ld-linux-armhf.so.3 --library-path ./lib ./app/irdet_linux_ncnn_app \
   --param ./model/irdet_ssdlite_ir_runtime_fixed_v2.param \
   --bin ./model/irdet_ssdlite_ir_runtime_fixed_v2.bin \
   --anchors ./model/anchors_xyxy_f32.bin \
@@ -243,7 +234,7 @@ set -eu
 DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 cd "$DIR"
 chmod +x app/irdet_linux_ncnn_app app/irdet_linux_pl_dw3x3_tool lib/ld-linux-armhf.so.3 || true
-./app/irdet_linux_ncnn_app \
+./lib/ld-linux-armhf.so.3 --library-path ./lib ./app/irdet_linux_ncnn_app \
   --param ./model/irdet_ssdlite_ir_runtime_fixed_v2.param \
   --bin ./model/irdet_ssdlite_ir_runtime_fixed_v2.bin \
   --anchors ./model/anchors_xyxy_f32.bin \
@@ -262,6 +253,79 @@ chmod +x app/irdet_linux_ncnn_app app/irdet_linux_pl_dw3x3_tool lib/ld-linux-arm
   --blob-only
 '@
 Write-LfAsciiFile -Path (Join-Path $bundleDir "run_dump_runtime_dw_input.sh") -Content $runDumpRuntimeDwInput
+
+$runRuntimeDwPlCompare = @'
+#!/bin/sh
+set -eu
+DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+cd "$DIR"
+chmod +x app/irdet_linux_ncnn_app app/irdet_linux_pl_dw3x3_tool lib/ld-linux-armhf.so.3 || true
+./lib/ld-linux-armhf.so.3 --library-path ./lib ./app/irdet_linux_ncnn_app \
+  --param ./model/irdet_ssdlite_ir_runtime_fixed_v2.param \
+  --bin ./model/irdet_ssdlite_ir_runtime_fixed_v2.bin \
+  --anchors ./model/anchors_xyxy_f32.bin \
+  --gray8 ./data/sample_gray8_640x512.bin \
+  --src-width 640 \
+  --src-height 512 \
+  --runtime-width 160 \
+  --runtime-height 128 \
+  --score-thresh-x1000 200 \
+  --iou-thresh-x1000 450 \
+  --mean 0.5 \
+  --std 0.5 \
+  --input-scale 0.00392156862745 \
+  --runtime-dw-pl-compare-dir ./data/pl_real_layer_case \
+  --runtime-dw-blob /inner/backbone/features.0/features.0.3/conv/conv.0/conv.0.2/Clip_output_0
+'@
+Write-LfAsciiFile -Path (Join-Path $bundleDir "run_demo_runtime_dw_pl_compare.sh") -Content $runRuntimeDwPlCompare
+
+$runInpathDwCpuFull = @'
+#!/bin/sh
+set -eu
+DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+cd "$DIR"
+chmod +x app/irdet_linux_ncnn_app app/irdet_linux_pl_dw3x3_tool lib/ld-linux-armhf.so.3 || true
+./lib/ld-linux-armhf.so.3 --library-path ./lib ./app/irdet_linux_ncnn_app \
+  --param ./model/irdet_ssdlite_ir_runtime_fixed_v2.param \
+  --bin ./model/irdet_ssdlite_ir_runtime_fixed_v2.bin \
+  --anchors ./model/anchors_xyxy_f32.bin \
+  --gray8 ./data/sample_gray8_640x512.bin \
+  --src-width 640 \
+  --src-height 512 \
+  --runtime-width 160 \
+  --runtime-height 128 \
+  --score-thresh-x1000 200 \
+  --iou-thresh-x1000 450 \
+  --mean 0.5 \
+  --std 0.5 \
+  --input-scale 0.00392156862745 \
+  --inpath-dw-cpu-full-dir ./data/pl_real_layer_case
+'@
+Write-LfAsciiFile -Path (Join-Path $bundleDir "run_demo_inpath_dw_cpu_full.sh") -Content $runInpathDwCpuFull
+
+$runInpathDwPlFull = @'
+#!/bin/sh
+set -eu
+DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+cd "$DIR"
+chmod +x app/irdet_linux_ncnn_app app/irdet_linux_pl_dw3x3_tool lib/ld-linux-armhf.so.3 || true
+./lib/ld-linux-armhf.so.3 --library-path ./lib ./app/irdet_linux_ncnn_app \
+  --param ./model/irdet_ssdlite_ir_runtime_fixed_v2.param \
+  --bin ./model/irdet_ssdlite_ir_runtime_fixed_v2.bin \
+  --anchors ./model/anchors_xyxy_f32.bin \
+  --gray8 ./data/sample_gray8_640x512.bin \
+  --src-width 640 \
+  --src-height 512 \
+  --runtime-width 160 \
+  --runtime-height 128 \
+  --score-thresh-x1000 200 \
+  --iou-thresh-x1000 450 \
+  --mean 0.5 \
+  --std 0.5 \
+  --input-scale 0.00392156862745 \
+  --inpath-dw-pl-full-dir ./data/pl_real_layer_case
+'@
+Write-LfAsciiFile -Path (Join-Path $bundleDir "run_demo_inpath_dw_pl_full.sh") -Content $runInpathDwPlFull
 
 $runTensor = @'
 #!/bin/sh
@@ -292,7 +356,7 @@ set -eu
 DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 cd "$DIR"
 chmod +x app/irdet_linux_pl_dw3x3_tool lib/ld-linux-armhf.so.3 || true
-./app/irdet_linux_pl_dw3x3_tool --all --skip-gpio
+./lib/ld-linux-armhf.so.3 --library-path ./lib ./app/irdet_linux_pl_dw3x3_tool --all --skip-gpio
 '@
 Write-LfAsciiFile -Path (Join-Path $bundleDir "run_pl_selftest.sh") -Content $runPlSelftest
 
@@ -314,6 +378,7 @@ Contents:
 - run_demo_gray8.sh
 - run_demo_gray8_with_pl_probe.sh
 - run_demo_gray8_with_pl_real_layer.sh
+- run_demo_runtime_dw_pl_compare.sh
 - run_demo_tensor.sh
 - run_pl_selftest.sh
 
@@ -321,7 +386,7 @@ Recommended first board-side run:
 1. Boot the board into Linux shell.
 2. Copy this whole directory onto the board, for example to /home/root/irdet_demo.
 3. Run:
-   chmod +x app/irdet_linux_ncnn_app app/irdet_linux_pl_dw3x3_tool lib/ld-linux-armhf.so.3 run_demo_gray8.sh run_demo_gray8_with_pl_probe.sh run_demo_gray8_with_pl_real_layer.sh run_demo_tensor.sh run_pl_selftest.sh
+   chmod +x app/irdet_linux_ncnn_app app/irdet_linux_pl_dw3x3_tool lib/ld-linux-armhf.so.3 run_demo_gray8.sh run_demo_gray8_with_pl_probe.sh run_demo_gray8_with_pl_real_layer.sh run_demo_runtime_dw_pl_compare.sh run_demo_tensor.sh run_pl_selftest.sh
    ./run_demo_gray8.sh
 
 Expected output pattern:
@@ -335,12 +400,14 @@ Notes:
   Linux-side PL full-scheduler replay inside the detector app
 - run_demo_gray8_with_pl_real_layer.sh runs the detector and also validates one exported
   fixed_v2 MobileNetV2 depthwise 3x3 real layer case through the PL full scheduler
+- run_demo_runtime_dw_pl_compare.sh extracts the validated runtime depthwise-input blob,
+  compares CPU vs PL on channel 11, and still runs the detector end-to-end
 - run_demo_tensor.sh bypasses preprocess and is useful for debugging runtime parity
 - run_pl_selftest.sh replays the validated PL dw3x3 MMIO/full-scheduler checks from Linux user space
 - the Linux selftest intentionally skips the optional AXI GPIO probe, because touching an
   un-decoded GPIO slave through /dev/mem would terminate the process with Bus error
-- the ARM executables are patched to use the bundled loader and runtime in this directory,
-  so board-side scripts can launch them directly without manually invoking ld-linux
+- the board-side scripts explicitly launch the bundled ld-linux loader with --library-path ./lib,
+  so the bundle does not depend on patching ELF interpreter metadata during packaging
 '@
 Set-Content -Path (Join-Path $bundleDir "README.txt") -Value $readme -Encoding ascii
 
@@ -359,6 +426,7 @@ $manifest = [ordered]@{
   run_gray8 = "run_demo_gray8.sh"
   run_gray8_with_pl_probe = "run_demo_gray8_with_pl_probe.sh"
   run_gray8_with_pl_real_layer = "run_demo_gray8_with_pl_real_layer.sh"
+  run_runtime_dw_pl_compare = "run_demo_runtime_dw_pl_compare.sh"
   run_tensor = "run_demo_tensor.sh"
   run_pl_selftest = "run_pl_selftest.sh"
 }

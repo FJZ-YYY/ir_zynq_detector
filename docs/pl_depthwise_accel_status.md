@@ -12,6 +12,31 @@ The purpose of this stage is to prove:
 - PS and PL can share a clear tensor contract
 - the chosen depthwise operator can be verified first as a kernel, then as a board-fit single-window accelerator
 
+## Latest Validated Milestone
+
+Date: 2026-04-26
+
+The project has now moved beyond side-band PL compare only.
+
+Current board-verified Linux paths:
+
+- `runtime_dw_pl_compare`: PASS
+- `inpath_dw_cpu_full`: PASS
+- `inpath_dw_pl_full`: PASS
+
+Meaning:
+
+- the runtime target blob can be extracted from the live detector
+- the target depthwise layer can be replaced by a CPU full-depthwise reference
+- the target depthwise layer can also be replaced by the existing PL full
+  scheduler looped over all `144` channels
+- the reinjected suffix still produces valid SSD detections
+
+Detailed frozen outputs and regression commands are documented in:
+
+- `docs/inpath_dw_stage_report.md`
+- `docs/inpath_dw_regression.md`
+
 ## Current Verified Milestones
 
 ### 1. PC-side real layer export is ready

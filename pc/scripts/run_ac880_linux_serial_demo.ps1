@@ -3,7 +3,7 @@ param(
   [string]$ComPort = "COM3",
   [int]$BaudRate = 115200,
   [string]$RemoteDir = "/home/root/irdet_demo",
-  [ValidateSet("gray8", "gray8_pl_probe", "gray8_pl_real_layer", "dump_runtime_dw_input", "pl_selftest", "full_demo")]
+  [ValidateSet("gray8", "gray8_pl_probe", "gray8_pl_real_layer", "dump_runtime_dw_input", "runtime_dw_pl_compare", "inpath_dw_cpu_full", "inpath_dw_pl_full", "pl_selftest", "full_demo")]
   [string]$Mode = "full_demo",
   [switch]$ProgramPl,
   [int]$PostProgramSettleSeconds = 3,
@@ -44,7 +44,7 @@ $commands = @()
 if ($SilenceKernelConsole) {
   $commands += "dmesg -n 1 >/dev/null 2>&1 || true"
 }
-$commands += "chmod +x $RemoteDir/run_demo_gray8.sh $RemoteDir/run_demo_gray8_with_pl_probe.sh $RemoteDir/run_demo_gray8_with_pl_real_layer.sh $RemoteDir/run_dump_runtime_dw_input.sh $RemoteDir/run_demo_tensor.sh $RemoteDir/run_pl_selftest.sh $RemoteDir/app/irdet_linux_ncnn_app $RemoteDir/app/irdet_linux_pl_dw3x3_tool $RemoteDir/lib/ld-linux-armhf.so.3 >/dev/null 2>&1 || true"
+$commands += "chmod +x $RemoteDir/run_demo_gray8.sh $RemoteDir/run_demo_gray8_with_pl_probe.sh $RemoteDir/run_demo_gray8_with_pl_real_layer.sh $RemoteDir/run_dump_runtime_dw_input.sh $RemoteDir/run_demo_runtime_dw_pl_compare.sh $RemoteDir/run_demo_inpath_dw_cpu_full.sh $RemoteDir/run_demo_inpath_dw_pl_full.sh $RemoteDir/run_demo_tensor.sh $RemoteDir/run_pl_selftest.sh $RemoteDir/app/irdet_linux_ncnn_app $RemoteDir/app/irdet_linux_pl_dw3x3_tool $RemoteDir/lib/ld-linux-armhf.so.3 >/dev/null 2>&1 || true"
 
 $commands += switch ($Mode) {
   "gray8" {
@@ -71,6 +71,24 @@ $commands += switch ($Mode) {
       "./run_dump_runtime_dw_input.sh"
     )
   }
+  "runtime_dw_pl_compare" {
+    @(
+      "cd $RemoteDir",
+      "./run_demo_runtime_dw_pl_compare.sh"
+    )
+  }
+  "inpath_dw_cpu_full" {
+    @(
+      "cd $RemoteDir",
+      "./run_demo_inpath_dw_cpu_full.sh"
+    )
+  }
+  "inpath_dw_pl_full" {
+    @(
+      "cd $RemoteDir",
+      "./run_demo_inpath_dw_pl_full.sh"
+    )
+  }
   "pl_selftest" {
     @(
       "cd $RemoteDir",
@@ -94,6 +112,18 @@ switch ($Mode) {
   "dump_runtime_dw_input" {
     $IdleThresholdMs = 3000
     $MaxReadSeconds = 30
+  }
+  "runtime_dw_pl_compare" {
+    $IdleThresholdMs = 8000
+    $MaxReadSeconds = 60
+  }
+  "inpath_dw_cpu_full" {
+    $IdleThresholdMs = 8000
+    $MaxReadSeconds = 60
+  }
+  "inpath_dw_pl_full" {
+    $IdleThresholdMs = 12000
+    $MaxReadSeconds = 120
   }
   "gray8_pl_probe" {
     $IdleThresholdMs = 4000

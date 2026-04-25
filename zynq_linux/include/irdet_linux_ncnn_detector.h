@@ -45,10 +45,32 @@ public:
         uint32_t* out_count,
         irdet_preprocess_stats_t* out_stats);
 
+    int run_from_gray8_with_blob_override(
+        const uint8_t* gray8,
+        uint16_t src_width,
+        uint16_t src_height,
+        const char* override_blob_name,
+        const irdet_linux_blob_tensor_t* override_blob,
+        irdet_detection_t* out_detections,
+        uint32_t max_detections,
+        uint32_t* out_count,
+        irdet_preprocess_stats_t* out_stats);
+
     int run_from_runtime_tensor(
         const float* runtime_input,
         uint16_t src_width,
         uint16_t src_height,
+        irdet_detection_t* out_detections,
+        uint32_t max_detections,
+        uint32_t* out_count,
+        irdet_preprocess_stats_t* out_stats);
+
+    int run_from_runtime_tensor_with_blob_override(
+        const float* runtime_input,
+        uint16_t src_width,
+        uint16_t src_height,
+        const char* override_blob_name,
+        const irdet_linux_blob_tensor_t* override_blob,
         irdet_detection_t* out_detections,
         uint32_t max_detections,
         uint32_t* out_count,

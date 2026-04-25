@@ -22,6 +22,7 @@ set(IRDET_ZYNQ_PS_INCLUDE "${IRDET_REPO_ROOT}/zynq_ps/include")
 set(IRDET_ZYNQ_PS_SRC "${IRDET_REPO_ROOT}/zynq_ps/src")
 
 set(IRDET_LINUX_NCNN_APP_SOURCES
+    "${CMAKE_CURRENT_LIST_DIR}/src/irdet_linux_dw3x3_case.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/irdet_linux_main.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/irdet_linux_ncnn_detector.cpp"
     "${IRDET_ZYNQ_PS_SRC}/ir_image_preprocess.c"

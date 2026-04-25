@@ -7,10 +7,20 @@
 #include <string>
 #include <vector>
 
+#include "irdet_linux_dw3x3_case.h"
 #include "irdet_linux_ncnn_detector.h"
 #include "irdet_linux_pl_dw3x3_probe.h"
 
 namespace {
+
+constexpr const char* kDefaultRuntimeDwCompareBlobName =
+    "/inner/backbone/features.0/features.0.3/conv/conv.0/conv.0.2/Clip_output_0";
+constexpr const char* kDefaultInpathDwTargetLayerName =
+    "backbone.features.0.3.conv.1.0";
+constexpr const char* kDefaultInpathDwInputBlobName =
+    "/inner/backbone/features.0/features.0.3/conv/conv.0/conv.0.2/Clip_output_0";
+constexpr const char* kDefaultInpathDwOutputBlobName =
+    "/inner/backbone/features.0/features.0.3/conv/conv.1/conv.1.2/Clip_output_0";
 
 struct cli_args_t {
     std::string param_path;
@@ -19,16 +29,29 @@ struct cli_args_t {
     std::string gray8_path;
     std::string tensor_path;
     std::string pl_real_layer_dir;
+    std::string runtime_dw_pl_compare_dir;
+    std::string runtime_dw_blob_name;
     std::string dump_blob_name;
     std::string dump_blob_out_prefix;
+    std::string inpath_dw_cpu_full_dir;
+    std::string inpath_dw_pl_full_dir;
+    std::string inpath_dw_target_layer_name;
+    std::string inpath_dw_input_blob_name;
+    std::string inpath_dw_output_blob_name;
     uint16_t src_width = 0U;
     uint16_t src_height = 0U;
     bool run_pl_probe_full = false;
     bool run_pl_real_layer = false;
+    bool run_runtime_dw_pl_compare = false;
+    bool run_inpath_dw_cpu_full = false;
+    bool run_inpath_dw_pl_full = false;
     bool blob_only = false;
     irdet_linux_runtime_config_t cfg;
     irdet_linux_pl_dw3x3_full_probe_config_t pl_probe_cfg;
     irdet_linux_pl_dw3x3_real_layer_case_config_t pl_real_layer_cfg;
+    irdet_linux_pl_dw3x3_runtime_blob_compare_config_t runtime_dw_pl_compare_cfg;
+    irdet_linux_dw3x3_case_config_t inpath_dw_cpu_cfg;
+    irdet_linux_pl_dw3x3_runtime_blob_full_config_t inpath_dw_pl_cfg;
 };
 
 void print_usage() {
@@ -40,6 +63,9 @@ void print_usage() {
         "                       [--runtime-width 160 --runtime-height 128 --mean 0.5 --std 0.5]\n"
         "                       [--pl-probe-full --pl-full-base 0x43C10000]\n"
         "                       [--pl-real-layer-dir <case_dir>]\n"
+        "                       [--runtime-dw-pl-compare-dir <case_dir> [--runtime-dw-blob <name>]]\n"
+        "                       [--inpath-dw-cpu-full-dir <case_dir>]\n"
+        "                       [--inpath-dw-pl-full-dir <case_dir>]\n"
         "                       [--dump-blob <name> --dump-blob-out <prefix> [--blob-only]]\n",
         stdout);
     std::fflush(stdout);
@@ -165,6 +191,84 @@ std::string blob_json_path_from_prefix(const std::string& prefix) {
     return prefix + ".json";
 }
 
+const char* runtime_dw_compare_reason(int rc) {
+    switch (rc) {
+    case -2:
+    case -3:
+    case -4:
+    case -5:
+    case -6:
+    case -9:
+        return "quant_param_mismatch";
+    case -7:
+    case -8:
+        return "shape_mismatch";
+    case -10:
+    case -11:
+    case -12:
+    case -13:
+    case -15:
+        return "pl_call_failed";
+    case -14:
+        return "pl_timeout";
+    case -16:
+        return "cpu_pl_error_too_large";
+    case -100:
+        return "internal_exception";
+    default:
+        return "runtime_dw_compare_failed";
+    }
+}
+
+const char* inpath_dw_cpu_reason(int rc) {
+    switch (rc) {
+    case -2:
+        return "case_metadata_missing";
+    case -3:
+        return "case_metadata_invalid";
+    case -4:
+        return "blob_shape_mismatch";
+    case -5:
+        return "bias_missing";
+    case -6:
+        return "case_tensor_mismatch";
+    case -100:
+        return "internal_exception";
+    default:
+        return "cpu_depthwise_failed";
+    }
+}
+
+const char* inpath_dw_pl_reason(int rc) {
+    switch (rc) {
+    case -2:
+        return "quant_param_missing";
+    case -3:
+        return "quant_param_invalid";
+    case -4:
+    case -5:
+    case -6:
+        return "quant_param_mismatch";
+    case -7:
+    case -8:
+        return "shape_mismatch";
+    case -10:
+    case -11:
+    case -12:
+    case -13:
+    case -15:
+        return "pl_call_failed";
+    case -14:
+        return "pl_timeout";
+    case -16:
+        return "cpu_pl_error_too_large";
+    case -100:
+        return "internal_exception";
+    default:
+        return "pl_depthwise_failed";
+    }
+}
+
 bool consume_value(int argc, char** argv, int& i, std::string* out) {
     if ((i + 1) >= argc) {
         return false;
@@ -208,6 +312,9 @@ bool parse_args(int argc, char** argv, cli_args_t* args) {
     irdet_linux_runtime_get_default_config(&args->cfg);
     irdet_linux_pl_dw3x3_full_probe_get_default_config(&args->pl_probe_cfg);
     irdet_linux_pl_dw3x3_real_layer_case_get_default_config(&args->pl_real_layer_cfg);
+    irdet_linux_pl_dw3x3_runtime_blob_compare_get_default_config(&args->runtime_dw_pl_compare_cfg);
+    irdet_linux_dw3x3_case_get_default_config(&args->inpath_dw_cpu_cfg);
+    irdet_linux_pl_dw3x3_runtime_blob_full_get_default_config(&args->inpath_dw_pl_cfg);
     for (i = 1; i < argc; ++i) {
         const std::string opt(argv[i]);
         if (opt == "--param") {
@@ -273,6 +380,25 @@ bool parse_args(int argc, char** argv, cli_args_t* args) {
                 return false;
             }
             args->run_pl_real_layer = true;
+        } else if (opt == "--runtime-dw-pl-compare-dir") {
+            if (!consume_value(argc, argv, i, &args->runtime_dw_pl_compare_dir)) {
+                return false;
+            }
+            args->run_runtime_dw_pl_compare = true;
+        } else if (opt == "--runtime-dw-blob") {
+            if (!consume_value(argc, argv, i, &args->runtime_dw_blob_name)) {
+                return false;
+            }
+        } else if (opt == "--inpath-dw-cpu-full-dir") {
+            if (!consume_value(argc, argv, i, &args->inpath_dw_cpu_full_dir)) {
+                return false;
+            }
+            args->run_inpath_dw_cpu_full = true;
+        } else if (opt == "--inpath-dw-pl-full-dir") {
+            if (!consume_value(argc, argv, i, &args->inpath_dw_pl_full_dir)) {
+                return false;
+            }
+            args->run_inpath_dw_pl_full = true;
         } else if (opt == "--dump-blob") {
             if (!consume_value(argc, argv, i, &args->dump_blob_name)) {
                 return false;
@@ -291,6 +417,8 @@ bool parse_args(int argc, char** argv, cli_args_t* args) {
             }
             args->pl_probe_cfg.full_base = (uintptr_t)std::strtoull(text.c_str(), &end_ptr, 0);
             args->pl_real_layer_cfg.full_base = args->pl_probe_cfg.full_base;
+            args->runtime_dw_pl_compare_cfg.full_base = args->pl_probe_cfg.full_base;
+            args->inpath_dw_pl_cfg.full_base = args->pl_probe_cfg.full_base;
             if (end_ptr == NULL || *end_ptr != '\0') {
                 return false;
             }
@@ -316,6 +444,29 @@ bool parse_args(int argc, char** argv, cli_args_t* args) {
     if (args->dump_blob_name.empty() != args->dump_blob_out_prefix.empty()) {
         return false;
     }
+    if (args->run_inpath_dw_cpu_full && args->run_inpath_dw_pl_full) {
+        return false;
+    }
+    if (args->run_runtime_dw_pl_compare && args->runtime_dw_blob_name.empty()) {
+        args->runtime_dw_blob_name = kDefaultRuntimeDwCompareBlobName;
+    }
+    if (args->run_inpath_dw_cpu_full || args->run_inpath_dw_pl_full) {
+        if (args->inpath_dw_target_layer_name.empty()) {
+            args->inpath_dw_target_layer_name = kDefaultInpathDwTargetLayerName;
+        }
+        if (args->inpath_dw_input_blob_name.empty()) {
+            args->inpath_dw_input_blob_name = kDefaultInpathDwInputBlobName;
+        }
+        if (args->inpath_dw_output_blob_name.empty()) {
+            args->inpath_dw_output_blob_name = kDefaultInpathDwOutputBlobName;
+        }
+    }
+    if (args->run_inpath_dw_cpu_full) {
+        args->inpath_dw_cpu_cfg.case_dir = args->inpath_dw_cpu_full_dir.c_str();
+    }
+    if (args->run_inpath_dw_pl_full) {
+        args->inpath_dw_pl_cfg.case_dir = args->inpath_dw_pl_full_dir.c_str();
+    }
     return true;
 }
 
@@ -338,17 +489,45 @@ void print_detections(const irdet_detection_t* detections, uint32_t count) {
     std::fflush(stdout);
 }
 
+void print_detections_with_prefix(const char* prefix, const irdet_detection_t* detections, uint32_t count) {
+    uint32_t i;
+    std::fprintf(stdout, "%s det_count=%u\n", prefix, count);
+    for (i = 0U; i < count; ++i) {
+        const irdet_detection_t& det = detections[i];
+        std::fprintf(
+            stdout,
+            "%s det%u class=%s score=%.3f bbox=[%u,%u,%u,%u]\n",
+            prefix,
+            i,
+            (det.class_name != NULL ? det.class_name : "unknown"),
+            (float)det.score_x1000 / 1000.0f,
+            det.x1,
+            det.y1,
+            det.x2,
+            det.y2);
+    }
+    std::fflush(stdout);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     cli_args_t args;
     irdet_linux_ncnn_detector detector;
     irdet_detection_t detections[IRDET_MAX_DETECTIONS];
+    irdet_detection_t ref_detections[IRDET_MAX_DETECTIONS];
     irdet_preprocess_stats_t stats = {};
+    irdet_preprocess_stats_t ref_stats = {};
     irdet_linux_blob_tensor_t blob = {};
     irdet_linux_pl_dw3x3_full_probe_result_t pl_probe_result = {};
     irdet_linux_pl_dw3x3_real_layer_case_result_t pl_real_layer_result = {};
+    irdet_linux_pl_dw3x3_runtime_blob_compare_result_t runtime_dw_pl_compare_result = {};
+    irdet_linux_dw3x3_case_result_t inpath_dw_cpu_result = {};
+    irdet_linux_pl_dw3x3_runtime_blob_full_result_t inpath_dw_pl_result = {};
+    std::vector<float> inpath_dw_pl_output_values;
+    bool runtime_dw_compare_failed = false;
     uint32_t out_count = 0U;
+    uint32_t ref_out_count = 0U;
     int rc;
 
     if (!parse_args(argc, argv, &args)) {
@@ -384,6 +563,110 @@ int main(int argc, char** argv) {
         detector.config().runtime_input_width,
         detector.config().runtime_input_height);
     std::fflush(stdout);
+
+    auto extract_named_blob =
+        [&](const std::string& blob_name, irdet_linux_blob_tensor_t* out_blob, irdet_preprocess_stats_t* out_blob_stats) -> int {
+        if (!args.gray8_path.empty()) {
+            std::vector<uint8_t> gray8 = read_u8_file(args.gray8_path);
+            const size_t expected = (size_t)args.src_width * (size_t)args.src_height;
+            if (gray8.size() != expected) {
+                std::fprintf(stderr, "gray8 input size mismatch bytes=%zu expected=%zu\n", gray8.size(), expected);
+                std::fflush(stderr);
+                return 3;
+            }
+            return detector.extract_blob_from_gray8(
+                gray8.data(),
+                args.src_width,
+                args.src_height,
+                blob_name.c_str(),
+                out_blob,
+                out_blob_stats);
+        }
+
+        std::vector<float> tensor = read_f32_file(args.tensor_path);
+        const size_t expected = (size_t)args.cfg.runtime_input_width * (size_t)args.cfg.runtime_input_height;
+        if (tensor.size() != expected) {
+            std::fprintf(stderr, "tensor input size mismatch elems=%zu expected=%zu\n", tensor.size(), expected);
+            std::fflush(stderr);
+            return 4;
+        }
+        return detector.extract_blob_from_runtime_tensor(
+            tensor.data(),
+            args.src_width,
+            args.src_height,
+            blob_name.c_str(),
+            out_blob,
+            out_blob_stats);
+    };
+
+    auto run_detector =
+        [&](const char* override_blob_name,
+            const irdet_linux_blob_tensor_t* override_blob,
+            irdet_detection_t* out_detections,
+            uint32_t* out_detection_count,
+            irdet_preprocess_stats_t* out_run_stats) -> int {
+        if (!args.gray8_path.empty()) {
+            std::vector<uint8_t> gray8 = read_u8_file(args.gray8_path);
+            const size_t expected = (size_t)args.src_width * (size_t)args.src_height;
+            if (gray8.size() != expected) {
+                std::fprintf(stderr, "gray8 input size mismatch bytes=%zu expected=%zu\n", gray8.size(), expected);
+                std::fflush(stderr);
+                return 3;
+            }
+            if (override_blob_name != NULL && override_blob != NULL) {
+                return detector.run_from_gray8_with_blob_override(
+                    gray8.data(),
+                    args.src_width,
+                    args.src_height,
+                    override_blob_name,
+                    override_blob,
+                    out_detections,
+                    IRDET_MAX_DETECTIONS,
+                    out_detection_count,
+                    out_run_stats);
+            }
+            return detector.run_from_gray8(
+                gray8.data(),
+                args.src_width,
+                args.src_height,
+                out_detections,
+                IRDET_MAX_DETECTIONS,
+                out_detection_count,
+                out_run_stats);
+        }
+
+        std::vector<float> tensor = read_f32_file(args.tensor_path);
+        const size_t expected = (size_t)args.cfg.runtime_input_width * (size_t)args.cfg.runtime_input_height;
+        if (tensor.size() != expected) {
+            std::fprintf(stderr, "tensor input size mismatch elems=%zu expected=%zu\n", tensor.size(), expected);
+            std::fflush(stderr);
+            return 4;
+        }
+        if (override_blob_name != NULL && override_blob != NULL) {
+            return detector.run_from_runtime_tensor_with_blob_override(
+                tensor.data(),
+                args.src_width,
+                args.src_height,
+                override_blob_name,
+                override_blob,
+                out_detections,
+                IRDET_MAX_DETECTIONS,
+                out_detection_count,
+                out_run_stats);
+        }
+        out_run_stats->src_width = args.src_width;
+        out_run_stats->src_height = args.src_height;
+        out_run_stats->dst_width = args.cfg.runtime_input_width;
+        out_run_stats->dst_height = args.cfg.runtime_input_height;
+        return detector.run_from_runtime_tensor(
+            tensor.data(),
+            args.src_width,
+            args.src_height,
+            out_detections,
+            IRDET_MAX_DETECTIONS,
+            out_detection_count,
+            out_run_stats);
+    };
 
     if (args.run_pl_probe_full) {
         rc = irdet_linux_pl_dw3x3_run_full_probe(&args.pl_probe_cfg, &pl_probe_result);
@@ -449,45 +732,116 @@ int main(int argc, char** argv) {
         std::fflush(stdout);
     }
 
+    if (args.run_runtime_dw_pl_compare) {
+        irdet_linux_blob_tensor_t runtime_dw_blob = {};
+        irdet_preprocess_stats_t runtime_dw_blob_stats = {};
+        (void)runtime_dw_blob_stats;
+
+        args.runtime_dw_pl_compare_cfg.case_dir = args.runtime_dw_pl_compare_dir.c_str();
+        try {
+            rc = extract_named_blob(args.runtime_dw_blob_name, &runtime_dw_blob, &runtime_dw_blob_stats);
+        } catch (const std::exception& exc) {
+            std::fprintf(
+                stderr,
+                "runtime_dw_pl_compare failed rc=9 reason=blob_get_failed blob_name=%s error=%s\n",
+                args.runtime_dw_blob_name.c_str(),
+                exc.what());
+            std::fflush(stderr);
+            runtime_dw_compare_failed = true;
+            rc = 0;
+        }
+
+        if (!runtime_dw_compare_failed) {
+            if (rc == 3 || rc == 4) {
+                std::fprintf(
+                    stderr,
+                    "runtime_dw_pl_compare failed rc=%d reason=blob_get_failed blob_name=%s\n",
+                    rc,
+                    args.runtime_dw_blob_name.c_str());
+                std::fflush(stderr);
+                runtime_dw_compare_failed = true;
+            } else if (rc != 0) {
+                std::fprintf(
+                    stderr,
+                    "runtime_dw_pl_compare failed rc=%d reason=blob_get_failed blob_name=%s last_ncnn=%d\n",
+                    rc,
+                    args.runtime_dw_blob_name.c_str(),
+                    detector.last_ncnn_status());
+                std::fflush(stderr);
+                runtime_dw_compare_failed = true;
+            }
+        }
+
+        if (!runtime_dw_compare_failed) {
+            rc = irdet_linux_pl_dw3x3_run_runtime_blob_compare(
+                &args.runtime_dw_pl_compare_cfg,
+                runtime_dw_blob.values.data(),
+                runtime_dw_blob.dims,
+                runtime_dw_blob.w,
+                runtime_dw_blob.h,
+                runtime_dw_blob.c,
+                &runtime_dw_pl_compare_result);
+            if (rc != 0) {
+                std::fprintf(
+                    stderr,
+                    "runtime_dw_pl_compare failed rc=%d reason=%s blob_name=%s channel=%u blob_shape=[c=%d,h=%d,w=%d] shape=%ux%u count=%u frac_bits=%u bias_q=%ld status_before=0x%08x status_after_start=0x%08x status_after_wait=0x%08x max_abs_acc_err=%ld max_abs_float_err=%.6f mean_abs_float_err=%.6f\n",
+                    rc,
+                    runtime_dw_compare_reason(rc),
+                    args.runtime_dw_blob_name.c_str(),
+                    runtime_dw_pl_compare_result.channel,
+                    runtime_dw_blob.c,
+                    runtime_dw_blob.h,
+                    runtime_dw_blob.w,
+                    runtime_dw_pl_compare_result.width,
+                    runtime_dw_pl_compare_result.height,
+                    runtime_dw_pl_compare_result.output_count,
+                    runtime_dw_pl_compare_result.frac_bits,
+                    (long)runtime_dw_pl_compare_result.bias_q,
+                    runtime_dw_pl_compare_result.status_before_start,
+                    runtime_dw_pl_compare_result.status_after_start,
+                    runtime_dw_pl_compare_result.status_after_wait,
+                    (long)runtime_dw_pl_compare_result.max_abs_acc_error,
+                    runtime_dw_pl_compare_result.max_abs_float_error,
+                    runtime_dw_pl_compare_result.mean_abs_float_error);
+                std::fflush(stderr);
+                runtime_dw_compare_failed = true;
+            } else {
+                std::fprintf(
+                    stdout,
+                    "runtime_dw_pl_compare rc=0 blob_name=%s channel=%u shape=%ux%u count=%u frac_bits=%u max_abs_acc_err=%ld max_abs_float_err=%.6f mean_abs_float_err=%.6f cpu_us=%u pl_e2e_us=%u pl_compute_us=%u first_cpu_acc=%ld first_pl_acc=%ld last_cpu_acc=%ld last_pl_acc=%ld\n",
+                    args.runtime_dw_blob_name.c_str(),
+                    runtime_dw_pl_compare_result.channel,
+                    runtime_dw_pl_compare_result.width,
+                    runtime_dw_pl_compare_result.height,
+                    runtime_dw_pl_compare_result.output_count,
+                    runtime_dw_pl_compare_result.frac_bits,
+                    (long)runtime_dw_pl_compare_result.max_abs_acc_error,
+                    runtime_dw_pl_compare_result.max_abs_float_error,
+                    runtime_dw_pl_compare_result.mean_abs_float_error,
+                    runtime_dw_pl_compare_result.cpu_us,
+                    runtime_dw_pl_compare_result.e2e_us,
+                    runtime_dw_pl_compare_result.compute_us,
+                    (long)runtime_dw_pl_compare_result.first_cpu_acc,
+                    (long)runtime_dw_pl_compare_result.first_pl_acc,
+                    (long)runtime_dw_pl_compare_result.last_cpu_acc,
+                    (long)runtime_dw_pl_compare_result.last_pl_acc);
+                std::fflush(stdout);
+            }
+        }
+    }
+
     if (!args.dump_blob_name.empty()) {
         try {
-            if (!args.gray8_path.empty()) {
-                std::vector<uint8_t> gray8 = read_u8_file(args.gray8_path);
-                const size_t expected = (size_t)args.src_width * (size_t)args.src_height;
-                if (gray8.size() != expected) {
-                    std::fprintf(stderr, "gray8 input size mismatch bytes=%zu expected=%zu\n", gray8.size(), expected);
-                    std::fflush(stderr);
-                    return 3;
-                }
-                rc = detector.extract_blob_from_gray8(
-                    gray8.data(),
-                    args.src_width,
-                    args.src_height,
-                    args.dump_blob_name.c_str(),
-                    &blob,
-                    &stats);
-            } else {
-                std::vector<float> tensor = read_f32_file(args.tensor_path);
-                const size_t expected = (size_t)args.cfg.runtime_input_width * (size_t)args.cfg.runtime_input_height;
-                if (tensor.size() != expected) {
-                    std::fprintf(stderr, "tensor input size mismatch elems=%zu expected=%zu\n", tensor.size(), expected);
-                    std::fflush(stderr);
-                    return 4;
-                }
-                rc = detector.extract_blob_from_runtime_tensor(
-                    tensor.data(),
-                    args.src_width,
-                    args.src_height,
-                    args.dump_blob_name.c_str(),
-                    &blob,
-                    &stats);
-            }
+            rc = extract_named_blob(args.dump_blob_name, &blob, &stats);
         } catch (const std::exception& exc) {
             std::fprintf(stderr, "blob input error: %s\n", exc.what());
             std::fflush(stderr);
             return 9;
         }
 
+        if (rc == 3 || rc == 4) {
+            return rc;
+        }
         if (rc != 0) {
             std::fprintf(
                 stderr,
@@ -527,72 +881,225 @@ int main(int argc, char** argv) {
         }
     }
 
-    try {
-        if (!args.gray8_path.empty()) {
-            std::vector<uint8_t> gray8 = read_u8_file(args.gray8_path);
-            const size_t expected = (size_t)args.src_width * (size_t)args.src_height;
-            if (gray8.size() != expected) {
-                std::fprintf(stderr, "gray8 input size mismatch bytes=%zu expected=%zu\n", gray8.size(), expected);
-                std::fflush(stderr);
-                return 3;
-            }
-            rc = detector.run_from_gray8(
-                gray8.data(),
-                args.src_width,
-                args.src_height,
-                detections,
-                IRDET_MAX_DETECTIONS,
-                &out_count,
-                &stats);
-        } else {
-            std::vector<float> tensor = read_f32_file(args.tensor_path);
-            const size_t expected = (size_t)args.cfg.runtime_input_width * (size_t)args.cfg.runtime_input_height;
-            if (tensor.size() != expected) {
-                std::fprintf(stderr, "tensor input size mismatch elems=%zu expected=%zu\n", tensor.size(), expected);
-                std::fflush(stderr);
-                return 4;
-            }
-            stats.src_width = args.src_width;
-            stats.src_height = args.src_height;
-            stats.dst_width = args.cfg.runtime_input_width;
-            stats.dst_height = args.cfg.runtime_input_height;
-            rc = detector.run_from_runtime_tensor(
-                tensor.data(),
-                args.src_width,
-                args.src_height,
-                detections,
-                IRDET_MAX_DETECTIONS,
-                &out_count,
-                &stats);
+    if (args.run_inpath_dw_cpu_full || args.run_inpath_dw_pl_full) {
+        irdet_linux_blob_tensor_t runtime_dw_input_blob = {};
+        irdet_linux_blob_tensor_t runtime_dw_output_blob = {};
+        const char* mode_name = args.run_inpath_dw_cpu_full ? "inpath_dw_cpu_full" : "inpath_dw_pl_full";
+
+        try {
+            rc = run_detector(NULL, NULL, ref_detections, &ref_out_count, &ref_stats);
+        } catch (const std::exception& exc) {
+            std::fprintf(stderr, "%s failed rc=5 reason=input_error error=%s\n", mode_name, exc.what());
+            std::fflush(stderr);
+            return 13;
         }
-    } catch (const std::exception& exc) {
-        std::fprintf(stderr, "input error: %s\n", exc.what());
-        std::fflush(stderr);
-        return 5;
-    }
+        if (rc != 0) {
+            std::fprintf(
+                stderr,
+                "%s failed rc=%d reason=full_detector_failed last_ncnn=%d last_post=%d\n",
+                mode_name,
+                rc,
+                detector.last_ncnn_status(),
+                detector.last_postprocess_status());
+            std::fflush(stderr);
+            return 14;
+        }
 
-    if (rc != 0) {
+        try {
+            rc = extract_named_blob(args.inpath_dw_input_blob_name, &runtime_dw_input_blob, &stats);
+        } catch (const std::exception& exc) {
+            std::fprintf(
+                stderr,
+                "%s failed rc=9 reason=blob_get_failed blob_name=%s error=%s\n",
+                mode_name,
+                args.inpath_dw_input_blob_name.c_str(),
+                exc.what());
+            std::fflush(stderr);
+            return 15;
+        }
+        if (rc != 0) {
+            std::fprintf(
+                stderr,
+                "%s failed rc=%d reason=blob_get_failed blob_name=%s last_ncnn=%d\n",
+                mode_name,
+                rc,
+                args.inpath_dw_input_blob_name.c_str(),
+                detector.last_ncnn_status());
+            std::fflush(stderr);
+            return 16;
+        }
+
+        if (args.run_inpath_dw_cpu_full) {
+            rc = irdet_linux_dw3x3_case_run_cpu_full(
+                &args.inpath_dw_cpu_cfg,
+                runtime_dw_input_blob.values.data(),
+                runtime_dw_input_blob.dims,
+                runtime_dw_input_blob.w,
+                runtime_dw_input_blob.h,
+                runtime_dw_input_blob.c,
+                &inpath_dw_cpu_result);
+            if (rc != 0) {
+                std::fprintf(
+                    stderr,
+                    "inpath_dw_cpu_full failed rc=%d reason=%s blob_name=%s blob_shape=[c=%d,h=%d,w=%d]\n",
+                    rc,
+                    inpath_dw_cpu_reason(rc),
+                    args.inpath_dw_input_blob_name.c_str(),
+                    runtime_dw_input_blob.c,
+                    runtime_dw_input_blob.h,
+                    runtime_dw_input_blob.w);
+                std::fflush(stderr);
+                return 17;
+            }
+
+            runtime_dw_output_blob.values = inpath_dw_cpu_result.output_values;
+            runtime_dw_output_blob.dims = 3;
+            runtime_dw_output_blob.w = (int)inpath_dw_cpu_result.width;
+            runtime_dw_output_blob.h = (int)inpath_dw_cpu_result.height;
+            runtime_dw_output_blob.c = (int)inpath_dw_cpu_result.channels;
+        } else {
+            rc = irdet_linux_pl_dw3x3_run_runtime_blob_full(
+                &args.inpath_dw_pl_cfg,
+                runtime_dw_input_blob.values.data(),
+                runtime_dw_input_blob.dims,
+                runtime_dw_input_blob.w,
+                runtime_dw_input_blob.h,
+                runtime_dw_input_blob.c,
+                &inpath_dw_pl_output_values,
+                &inpath_dw_pl_result);
+            if (rc != 0) {
+                std::fprintf(
+                    stderr,
+                    "inpath_dw_pl_full failed rc=%d reason=%s blob_name=%s blob_shape=[c=%d,h=%d,w=%d] channel=%u frac_bits=%u max_abs_acc_err=%ld max_abs_float_err=%.6f mean_abs_float_err=%.6f status_before=0x%08x status_after_start=0x%08x status_after_wait=0x%08x\n",
+                    rc,
+                    inpath_dw_pl_reason(rc),
+                    args.inpath_dw_input_blob_name.c_str(),
+                    runtime_dw_input_blob.c,
+                    runtime_dw_input_blob.h,
+                    runtime_dw_input_blob.w,
+                    inpath_dw_pl_result.failed_channel,
+                    inpath_dw_pl_result.frac_bits,
+                    (long)inpath_dw_pl_result.max_abs_acc_error,
+                    inpath_dw_pl_result.max_abs_float_error,
+                    inpath_dw_pl_result.mean_abs_float_error,
+                    inpath_dw_pl_result.status_before_start,
+                    inpath_dw_pl_result.status_after_start,
+                    inpath_dw_pl_result.status_after_wait);
+                std::fflush(stderr);
+                return 17;
+            }
+
+            runtime_dw_output_blob.values = inpath_dw_pl_output_values;
+            runtime_dw_output_blob.dims = 3;
+            runtime_dw_output_blob.w = (int)inpath_dw_pl_result.width;
+            runtime_dw_output_blob.h = (int)inpath_dw_pl_result.height;
+            runtime_dw_output_blob.c = (int)inpath_dw_pl_result.channels;
+        }
+
+        try {
+            rc = run_detector(
+                args.inpath_dw_output_blob_name.c_str(),
+                &runtime_dw_output_blob,
+                detections,
+                &out_count,
+                &stats);
+        } catch (const std::exception& exc) {
+            std::fprintf(stderr, "%s failed rc=10 reason=input_error error=%s\n", mode_name, exc.what());
+            std::fflush(stderr);
+            return 18;
+        }
+        if (rc != 0) {
+            std::fprintf(
+                stderr,
+                "%s failed rc=%d reason=suffix_run_failed output_blob=%s last_ncnn=%d last_post=%d\n",
+                mode_name,
+                rc,
+                args.inpath_dw_output_blob_name.c_str(),
+                detector.last_ncnn_status(),
+                detector.last_postprocess_status());
+            std::fflush(stderr);
+            return 19;
+        }
+
         std::fprintf(
-            stderr,
-            "run failed rc=%d last_ncnn=%d last_post=%d\n",
-            rc,
-            detector.last_ncnn_status(),
-            detector.last_postprocess_status());
-        std::fflush(stderr);
-        return 6;
-    }
+            stdout,
+            "pre_in=%ux%u pre_out=%ux%u min=%u max=%u mean_x1000=%ld\n",
+            stats.src_width,
+            stats.src_height,
+            stats.dst_width,
+            stats.dst_height,
+            (uint32_t)stats.min_pixel,
+            (uint32_t)stats.max_pixel,
+            (long)stats.mean_x1000);
+        std::fprintf(stdout, "target_layer=%s\n", args.inpath_dw_target_layer_name.c_str());
+        std::fprintf(stdout, "input_blob=%s\n", args.inpath_dw_input_blob_name.c_str());
+        std::fprintf(stdout, "output_blob=%s\n", args.inpath_dw_output_blob_name.c_str());
+        std::fprintf(
+            stdout,
+            "shape=%ux%ux%u\n",
+            (uint32_t)runtime_dw_output_blob.c,
+            (uint32_t)runtime_dw_output_blob.w,
+            (uint32_t)runtime_dw_output_blob.h);
+        if (args.run_inpath_dw_cpu_full) {
+            std::fprintf(stdout, "backend=cpu_depthwise\n");
+            std::fprintf(stdout, "cpu_dw_us=%u\n", inpath_dw_cpu_result.cpu_us);
+        } else {
+            std::fprintf(stdout, "backend=pl_depthwise_loop_all_channels\n");
+            std::fprintf(stdout, "channels=%u\n", inpath_dw_pl_result.channels);
+            std::fprintf(stdout, "per_channel_count=%u\n", inpath_dw_pl_result.count_per_channel);
+            std::fprintf(stdout, "pl_calls=%u\n", inpath_dw_pl_result.pl_calls);
+            std::fprintf(stdout, "frac_bits=%u\n", inpath_dw_pl_result.frac_bits);
+            std::fprintf(stdout, "max_abs_acc_err=%ld\n", (long)inpath_dw_pl_result.max_abs_acc_error);
+            std::fprintf(stdout, "max_abs_float_err=%.6f\n", inpath_dw_pl_result.max_abs_float_error);
+            std::fprintf(stdout, "mean_abs_float_err=%.6f\n", inpath_dw_pl_result.mean_abs_float_error);
+            std::fprintf(stdout, "cpu_dw_us=%u\n", inpath_dw_pl_result.cpu_us);
+            std::fprintf(stdout, "pl_e2e_us=%u\n", inpath_dw_pl_result.e2e_us);
+            std::fprintf(stdout, "pl_compute_us_total=%u\n", inpath_dw_pl_result.compute_us_total);
+            std::fprintf(stdout, "first_cpu_acc=%ld\n", (long)inpath_dw_pl_result.first_cpu_acc);
+            std::fprintf(stdout, "first_pl_acc=%ld\n", (long)inpath_dw_pl_result.first_pl_acc);
+            std::fprintf(stdout, "last_cpu_acc=%ld\n", (long)inpath_dw_pl_result.last_cpu_acc);
+            std::fprintf(stdout, "last_pl_acc=%ld\n", (long)inpath_dw_pl_result.last_pl_acc);
+        }
+        std::fflush(stdout);
+        print_detections_with_prefix("full_ref", ref_detections, ref_out_count);
+        std::fprintf(stdout, "%s rc=0\n", mode_name);
+        std::fflush(stdout);
+        print_detections(detections, out_count);
+    } else {
+        try {
+            rc = run_detector(NULL, NULL, detections, &out_count, &stats);
+        } catch (const std::exception& exc) {
+            std::fprintf(stderr, "input error: %s\n", exc.what());
+            std::fflush(stderr);
+            return 5;
+        }
 
-    std::fprintf(
-        stdout,
-        "pre_in=%ux%u pre_out=%ux%u min=%u max=%u mean_x1000=%ld\n",
-        stats.src_width,
-        stats.src_height,
-        stats.dst_width,
-        stats.dst_height,
-        (uint32_t)stats.min_pixel,
-        (uint32_t)stats.max_pixel,
-        (long)stats.mean_x1000);
-    std::fflush(stdout);
-    print_detections(detections, out_count);
+        if (rc != 0) {
+            std::fprintf(
+                stderr,
+                "run failed rc=%d last_ncnn=%d last_post=%d\n",
+                rc,
+                detector.last_ncnn_status(),
+                detector.last_postprocess_status());
+            std::fflush(stderr);
+            return 6;
+        }
+
+        std::fprintf(
+            stdout,
+            "pre_in=%ux%u pre_out=%ux%u min=%u max=%u mean_x1000=%ld\n",
+            stats.src_width,
+            stats.src_height,
+            stats.dst_width,
+            stats.dst_height,
+            (uint32_t)stats.min_pixel,
+            (uint32_t)stats.max_pixel,
+            (long)stats.mean_x1000);
+        std::fflush(stdout);
+        print_detections(detections, out_count);
+    }
+    if (runtime_dw_compare_failed) {
+        return 12;
+    }
     return 0;
 }
