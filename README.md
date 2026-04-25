@@ -1,162 +1,136 @@
 # IR Zynq Detector
 
-基于 Zynq-7020 的离线红外目标检测部署系统骨架工程。
+基于 Zynq-7020 的离线红外目标检测部署工程，目标是把 FLIR_ADAS_v2 上训练得到的轻量模型部署到 Zynq 板端，并验证 PS 推理链路与 PL 关键算子加速。
 
-当前优先目标不是追求模型精度，而是先把工程链路跑通：
+当前工程重点不是追求最终精度，而是把下面这条真实部署链路跑通：
 
-1. PC 端读取一张红外图片。
-2. 通过 UART 把图像数据送到 Zynq 板端。
-3. 板端先完成收图、校验和串口打印。
-4. 后续再逐步接入真实模型推理、后处理和 PL 加速。
+1. PC 端整理 FLIR_ADAS_v2、训练轻量检测模型并导出 ONNX / NCNN。
+2. PC 端读取热红外图片，发送灰度图或通过 Linux 网络部署包下发到板端。
+3. Zynq PS/Linux 端完成预处理、推理、后处理并输出 `class / score / bbox`。
+4. Zynq PL 端验证 depthwise 3x3 卷积加速，并逐步接入真实推理路径。
 
-## 当前架构
+## 当前状态
 
-- PC 端：数据集整理、训练、模型导出、量化、串口发图
-- Zynq PS 端：收图、预处理主控、推理、后处理、UART 输出
-- Zynq PL 端：后续加入 resize、normalize、DMA、buffer 等固定功能
+- 已完成 UART 收图闭环与裸机收图骨架。
+- 已完成 SSDLite + MobileNetV2 三类训练、导出、ONNX、NCNN 运行时链路。
+- 已统一固定输入契约为 `NCHW = 1x1x128x160`。
+- 已在 AC880 出厂 Linux 上跑通 NCNN 检测 demo。
+- 已在板上完成 PL `dw3x3` depthwise 加速器 selftest、full scheduler 验证与真实层回放验证。
+- 当前采用“每次上电后通过 U-Boot 临时加载 bitstream + DTB”的方式运行，不改动出厂启动分区。
 
-当前明确不做：
-
-- 不做整网纯 HDL 重写
-- 不做实时红外相机采集
-- 第一版不让板端自己解析 `jpg/png`
-
-## 当前确认路线
-
-- 主机系统：Windows
-- 工具链：Vivado 2020.2 + Vitis 2020.2
-- 数据集：FLIR_ADAS_v2
-- 首批类别：`person`、`bicycle`、`car`
-- 首版输入链路：PC 解码图片文件，UART 发送灰度像素流
-- 板端运行：先裸机，真实模型过难时再考虑 Linux
-
-## 目录结构
+## 项目结构
 
 ```text
 ir_zynq_detector/
-├─ configs/            # 工程配置
-├─ docs/               # 阶段计划、协议、联调文档
-├─ hw/vivado/          # Vivado Tcl 脚本
-├─ pc/                 # PC 端脚本与工具
-├─ vitis/              # Vitis / XSCT 脚本
-├─ zynq_pl/            # PL 端 RTL 与 testbench
-└─ zynq_ps/            # PS 端 C/C++ 源码
+├─ configs/      # 部署契约和工程配置
+├─ docs/         # 方案说明、阶段计划、联调记录、demo 文档
+├─ hw/           # Vivado Tcl 和 block design 脚本
+├─ pc/           # 训练、导出、评估、打包、上板部署脚本
+├─ vitis/        # XSCT / Vitis 工程脚本
+├─ zynq_linux/   # Linux 端 NCNN detector 与 PL tool
+├─ zynq_pl/      # PL RTL、testbench、AXI MMIO 接口实现
+└─ zynq_ps/      # PS 裸机侧预处理、协议、后处理代码
 ```
 
-## 当前可运行内容
+## 当前主线
 
-### 1. 占位检测器
+### 1. 训练与导出
 
-- [mock_ir_detector.py](/G:/FPGA/ir_zynq_detector/pc/tools/mock_ir_detector.py)
+- 训练脚本：`pc/scripts/train_ssdlite_ir.py`
+- 固定契约训练入口：`pc/scripts/run_formal_train_ssdlite_ir_fixed_v2.ps1`
+- ONNX 导出：`pc/scripts/export_ssdlite_ir_runtime_onnx.py`
+- NCNN 转换：`pc/scripts/convert_runtime_onnx_to_ncnn.ps1`
 
-作用：
+当前 active 路线是 `fixed_v2`，对应统一后的模型输入契约：
 
-- 读取一张图片
-- 生成一个占位检测框
-- 输出 `class + score + bbox`
+- `height = 128`
+- `width = 160`
+- `tensor = 1x1x128x160`
 
-这一步用于先打通 “输入图片 -> 输出检测结果” 的格式。
+### 2. 裸机 UART 图像链路
 
-### 2. UART 发图脚本
+- PC 发图：`pc/tools/send_uart_image.py`
+- 协议说明：[`docs/uart_image_protocol.md`](docs/uart_image_protocol.md)
+- PS 裸机收图：`zynq_ps/src/uart_image_receiver_baremetal.c`
+- 预处理：`zynq_ps/src/ir_image_preprocess.c`
 
-- [send_uart_image.py](/G:/FPGA/ir_zynq_detector/pc/tools/send_uart_image.py)
+UART 传输的是“原始灰度图像流 + 宽高头”，不是模型张量本身；固定张量 `1x1x128x160` 在 PS / Linux 端预处理后生成。
 
-作用：
+### 3. Linux 真机推理
 
-- 读取一张图片文件
-- 转成灰度像素流
-- 组装 `IRDT` 协议帧
-- 通过串口发给板子
+- Linux detector：`zynq_linux/src/irdet_linux_main.cpp`
+- NCNN detector 实现：`zynq_linux/src/irdet_linux_ncnn_detector.cpp`
+- demo 打包：`pc/scripts/package_zynq_linux_demo.ps1`
+- 板端部署与运行：`pc/scripts/run_ac880_linux_demo.ps1`
+- 选 FLIR 图片上板推理：`pc/scripts/run_ac880_linux_image_infer.ps1`
 
-协议说明见 [uart_image_protocol.md](/G:/FPGA/ir_zynq_detector/docs/uart_image_protocol.md)。
+### 4. PL depthwise 3x3 加速验证
 
-现在也支持从数据集目录直接选图：
+- RTL：`zynq_pl/rtl/mobilenet_dw3x3_accel.sv`
+- full scheduler：`zynq_pl/rtl/mobilenet_dw3x3_channel_full_axi.sv`
+- bare-metal selftest：`vitis/run_dw3x3_selftest_on_board.tcl`
+- Linux tool：`zynq_linux/src/irdet_linux_pl_dw3x3_tool.cpp`
+- demo 文档：[`docs/pl_dw3x3_full_scheduler_demo.md`](docs/pl_dw3x3_full_scheduler_demo.md)
 
-```powershell
-python pc\tools\send_uart_image.py --dataset-root D:\datasets\FLIR_ADAS_v2 --index 0 --port COM3 --baud 921600 --wait-ack
-```
+## 推荐使用方式
 
-或者按文件名关键字筛选：
+### Windows 端准备
 
-```powershell
-python pc\tools\send_uart_image.py --dataset-root D:\datasets\FLIR_ADAS_v2 --match thermal --index 0 --port COM3 --baud 921600 --wait-ack
-```
+- Vivado 2020.2
+- Vitis 2020.2
+- Python 3.x
+- FLIR_ADAS_v2 数据集
 
-### 3. PS 裸机收图骨架
-
-- [uart_image_receiver_baremetal.c](/G:/FPGA/ir_zynq_detector/zynq_ps/src/uart_image_receiver_baremetal.c)
-- [uart_image_proto.c](/G:/FPGA/ir_zynq_detector/zynq_ps/src/uart_image_proto.c)
-- [uart_image_proto.h](/G:/FPGA/ir_zynq_detector/zynq_ps/include/uart_image_proto.h)
-- [ir_image_preprocess.c](/G:/FPGA/ir_zynq_detector/zynq_ps/src/ir_image_preprocess.c)
-- [ir_image_preprocess.h](/G:/FPGA/ir_zynq_detector/zynq_ps/include/ir_image_preprocess.h)
-
-当前目标：
-
-- 接收一帧图像
-- 打印宽高、帧大小和校验值
-- 在板端完成 `160x128` 的 resize + normalize
-
-### 4. Vivado 硬件平台脚本
-
-- [create_project.tcl](/G:/FPGA/ir_zynq_detector/hw/vivado/create_project.tcl)
-- [create_zynq_ps_uart_bd.tcl](/G:/FPGA/ir_zynq_detector/hw/vivado/bd/create_zynq_ps_uart_bd.tcl)
-
-当前硬件平台是最小版本：
-
-- Zynq PS
-- DDR
-- FIXED_IO
-- PS UART1
-
-### 5. Vitis 工程脚本
-
-- [create_baremetal_app.tcl](/G:/FPGA/ir_zynq_detector/vitis/create_baremetal_app.tcl)
-
-作用：
-
-- 根据 Vivado 导出的 XSA 创建 platform
-- 创建裸机应用工程
-- 导入当前 `zynq_ps` 下的源文件
-
-## 快速开始
-
-### 安装 Python 依赖
+安装 Python 依赖：
 
 ```powershell
 cd G:\FPGA\ir_zynq_detector
 python -m pip install -r pc\requirements.txt
 ```
 
-### 测试 UART 帧打包
+### 训练固定契约模型
 
 ```powershell
-python pc\tools\send_uart_image.py --image path\to\test.png --dump-frame build\test_uart.bin
+powershell -ExecutionPolicy Bypass -File .\pc\scripts\run_formal_train_ssdlite_ir_fixed_v2.ps1 -DatasetRoot "G:\chormxiazai\FLIR_ADAS_v2"
 ```
 
-### 创建 Vivado 工程并导出 XSA
+### 导出 fixed_v2 运行时模型
 
 ```powershell
-F:\Xilinx\Vivado\2020.2\bin\vivado.bat -mode batch -source hw\vivado\create_project.tcl
+powershell -ExecutionPolicy Bypass -File .\pc\scripts\run_export_ssdlite_ir_fixed_v2.ps1
 ```
 
-### 创建 Vitis 裸机应用
+### 板端 Linux demo
+
+如果板子已上电并走临时 U-Boot 启动流程，可运行：
 
 ```powershell
-F:\Xilinx\Vitis\2020.2\bin\xsct.bat vitis\create_baremetal_app.tcl
+powershell -ExecutionPolicy Bypass -File .\pc\scripts\run_ac880_temp_uboot_demo.ps1 -RepoRoot G:\FPGA\ir_zynq_detector -ComPort COM3 -BaudRate 115200 -Mode gray8_pl_real_layer
 ```
 
-## 文档入口
+### 从 FLIR 数据集选图并在板端推理
 
-- 阶段拆解：[stage_plan.md](/G:/FPGA/ir_zynq_detector/docs/stage_plan.md)
-- UART 协议：[uart_image_protocol.md](/G:/FPGA/ir_zynq_detector/docs/uart_image_protocol.md)
-- 板级联调：[board_bringup_uart.md](/G:/FPGA/ir_zynq_detector/docs/board_bringup_uart.md)
+```powershell
+powershell -ExecutionPolicy Bypass -File .\pc\scripts\run_ac880_linux_image_infer.ps1 -DatasetRoot "G:\chormxiazai\FLIR_ADAS_v2" -Match "images_thermal_val\data" -Index 0 -Pick first -RefreshBundle
+```
 
-## 当前假设
+## 关键文档
 
-下面这些假设已经写进当前脚本：
+- 阶段计划：[`docs/stage_plan.md`](docs/stage_plan.md)
+- UART 协议：[`docs/uart_image_protocol.md`](docs/uart_image_protocol.md)
+- 板端带起：[`docs/board_bringup_uart.md`](docs/board_bringup_uart.md)
+- 部署契约：[`docs/deployment_contract.md`](docs/deployment_contract.md)
+- 模型评估与导出：[`docs/model_eval_and_export.md`](docs/model_eval_and_export.md)
+- 真部署路线：[`docs/true_inference_runtime_plan.md`](docs/true_inference_runtime_plan.md)
+- AC880 U-Boot 临时启动：[`docs/ac880_boot_pl_preload.md`](docs/ac880_boot_pl_preload.md)
 
-1. 器件型号暂按 `xc7z020clg400-1`
-2. 板载串口走 `PS UART1 (MIO 48..49)`
-3. 第一阶段先不要求 bitstream，可先导出 XSA 跑裸机
+## 当前未提交到仓库的内容
 
-如果其中任意一条和你的板子不一致，把实际日志或现象发回来，我会直接替你改脚本。
+为了保持仓库干净，下面这些内容默认不进 Git：
+
+- 虚拟环境、Vivado / Xilinx 缓存
+- `build/` 下的生成产物
+- 下载的第三方工具与模型二进制
+- 各类日志、仿真缓存、bitstream、xsa、elf
+
+这些内容都可以通过仓库内脚本在本地重新生成或重新打包。
