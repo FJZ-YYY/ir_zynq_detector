@@ -1,0 +1,42 @@
+project:
+  name: ir_zynq_detector
+  stage: phase1_vivado_vitis_uart_bringup
+
+dataset:
+  name: FLIR_ADAS_v2
+  classes:
+    - person
+    - bicycle
+    - car
+
+model:
+  input_width: 160
+  input_height: 128
+  score_threshold: 0.35
+  iou_threshold: 0.45
+  export_format: onnx
+  runtime_backend: stub
+
+board:
+  family: zynq-7000
+  soc: zynq-7020
+  part: xc7z020clg400-1
+  part_confirmed: false
+  ps_runtime: baremetal_first
+  ps_runtime_fallback: linux
+  toolchain: vivado_vitis_2020_2
+  uart_connected_to: ps_uart1_mio_48_49
+
+io:
+  result_dir: outputs
+  result_json: mock_detection.json
+  input_transport: uart
+  pc_decode_image_file: true
+  board_resize_image: true
+  board_normalize_image: true
+  uart:
+    baud_rate: 921600
+    pixel_format: gray8
+    max_image_width: 640
+    max_image_height: 512
+    max_payload_bytes: 327680

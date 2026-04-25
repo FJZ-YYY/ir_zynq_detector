@@ -1,0 +1,123 @@
+{
+  "contract_name": "ssdlite_mobilenetv2_ir_v1_bridge",
+  "status": "interface_validation",
+  "created_date": "2026-04-23",
+  "purpose": "Lock the current PC-to-Zynq interface while keeping the next fixed-training contract explicit.",
+  "classes": {
+    "background_id": 0,
+    "foreground": [
+      {
+        "id": 1,
+        "name": "person"
+      },
+      {
+        "id": 2,
+        "name": "bicycle"
+      },
+      {
+        "id": 3,
+        "name": "car"
+      }
+    ]
+  },
+  "uart_image_input": {
+    "transport": "ps_uart",
+    "baud_rate": 921600,
+    "pixel_format": "gray8",
+    "host_decodes_image_file": true,
+    "packet_has_width_height_header": true,
+    "max_source_width": 640,
+    "max_source_height": 512,
+    "max_payload_bytes": 327680
+  },
+  "ps_preprocess_live_tensor": {
+    "layout": "NCHW",
+    "dtype": "float32",
+    "shape": [
+      1,
+      1,
+      128,
+      160
+    ],
+    "width": 160,
+    "height": 128,
+    "resize": "nearest_or_bilinear_c_implementation",
+    "normalization": {
+      "formula": "(gray8 / 255.0 - mean) / stddev",
+      "mean": 0.5,
+      "stddev": 0.5
+    }
+  },
+  "current_model_artifacts": {
+    "checkpoint": "G:/FPGA/ir_zynq_detector/build/train_ssdlite_ir_formal/best.pt",
+    "onnx_raw_head": "G:/FPGA/ir_zynq_detector/build/model/irdet_ssdlite_ir_formal.onnx",
+    "onnx_metadata": "G:/FPGA/ir_zynq_detector/build/model/irdet_ssdlite_ir_formal.json",
+    "runtime_legacy_onnx": "G:/FPGA/ir_zynq_detector/build/model/irdet_ssdlite_ir_runtime_legacy.onnx",
+    "runtime_legacy_metadata": "G:/FPGA/ir_zynq_detector/build/model/irdet_ssdlite_ir_runtime_legacy.json",
+    "raw_sample_header": "G:/FPGA/ir_zynq_detector/zynq_ps/include/ir_ssd_raw_sample_data.h",
+    "onnx_input_shape": [
+      1,
+      1,
+      128,
+      160
+    ],
+    "raw_head_tensor_space": {
+      "width": 128,
+      "height": 160,
+      "num_anchors": 660,
+      "num_classes_with_background": 4,
+      "note": "This reflects the current torchvision SSD transform behavior. It is valid for the current checkpoint and raw-sample bridge, but should not be copied blindly into the next retraining contract."
+    },
+    "postprocess": {
+      "score_threshold": 0.2,
+      "nms_iou_threshold": 0.45,
+      "box_format": "xyxy",
+      "box_coder_weights": [
+        10.0,
+        10.0,
+        5.0,
+        5.0
+      ]
+    }
+  },
+  "pl_acceleration_proof": {
+    "operator": "mobilenetv2_depthwise_3x3",
+    "single_window_base_addr": "0x43C00000",
+    "full_channel_scheduler_base_addr": "0x43C10000",
+    "verified_case": {
+      "channel": 11,
+      "feature_width": 40,
+      "feature_height": 32,
+      "outputs": 1280,
+      "last_verified_result": "full scheduler PASS"
+    }
+  },
+  "next_retrain_fixed_contract": {
+    "status": "must_lock_before_next_training_run",
+    "recommended_name": "ssdlite_mobilenetv2_ir_v2_fixed_input",
+    "input_layout": "NCHW",
+    "input_dtype": "float32",
+    "input_shape": [
+      1,
+      1,
+      128,
+      160
+    ],
+    "input_width": 160,
+    "input_height": 128,
+    "source_pixel_format": "gray8",
+    "normalization": {
+      "formula": "(gray8 / 255.0 - 0.5) / 0.5",
+      "output_range_for_gray8": [
+        -1.0,
+        1.0
+      ]
+    },
+    "required_before_retrain": [
+      "Confirm train, eval, export, PS preprocess, and SSD postprocess all use the same width/height convention.",
+      "Export metadata must state both input tensor shape and raw-head tensor-space width/height.",
+      "A verification script must fail if the exported raw-head tensor space silently swaps width and height.",
+      "Only after this is locked should a model-quality retraining run replace the current best.pt."
+    ]
+  }
+}
