@@ -4,7 +4,9 @@ build/
 outputs/
 tools/
 !pc/tools/
-!pc/tools/*.py
+pc/tools/*
+!pc/tools/board_visual_infer.py
+!pc/tools/board_visual_demo_gui.py
 xsim.dir/
 __pycache__/
 *.pyc
