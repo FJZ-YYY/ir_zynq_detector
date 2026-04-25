@@ -3,6 +3,8 @@
 build/
 outputs/
 tools/
+!pc/tools/
+!pc/tools/*.py
 xsim.dir/
 __pycache__/
 *.pyc
