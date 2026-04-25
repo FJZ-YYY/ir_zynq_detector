@@ -66,8 +66,8 @@ UART 传输的是“原始灰度图像流 + 宽高头”，不是模型张量本
 
 ### 4. PL depthwise 3x3 加速验证
 
-- RTL：`zynq_pl/src/ir_pl_dw3x3_axi.sv`
-- full scheduler：`zynq_pl/src/ir_pl_dw3x3_full_scheduler_axi.sv`
+- RTL：`zynq_pl/rtl/mobilenet_dw3x3_accel.sv`
+- full scheduler：`zynq_pl/rtl/mobilenet_dw3x3_channel_full_axi.sv`
 - bare-metal selftest：`vitis/run_dw3x3_selftest_on_board.tcl`
 - Linux tool：`zynq_linux/src/irdet_linux_pl_dw3x3_tool.cpp`
 - demo 文档：[`docs/pl_dw3x3_full_scheduler_demo.md`](docs/pl_dw3x3_full_scheduler_demo.md)
