@@ -117,6 +117,8 @@ powershell -ExecutionPolicy Bypass -File .\pc\scripts\run_ac880_linux_image_infe
 ## 关键文档
 
 - 阶段计划：[`docs/stage_plan.md`](docs/stage_plan.md)
+- GitHub 学习导图：[`docs/github_learning_guide.md`](docs/github_learning_guide.md)
+- 当前验证快照：[`docs/current_verified_snapshot.md`](docs/current_verified_snapshot.md)
 - UART 协议：[`docs/uart_image_protocol.md`](docs/uart_image_protocol.md)
 - 板端带起：[`docs/board_bringup_uart.md`](docs/board_bringup_uart.md)
 - 部署契约：[`docs/deployment_contract.md`](docs/deployment_contract.md)
